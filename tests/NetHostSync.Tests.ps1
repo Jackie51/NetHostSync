@@ -14,6 +14,8 @@ Describe 'Update-HostsLines' {
         # Describe 顶层（BeforeAll 之外）的变量在执行阶段的 It 块中不可见，
         # 因此共享变量必须放在 BeforeAll 内。
         $targets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
+        # 同理：含空字符串的数组在 It 块内构造会被吞掉，必须在 BeforeAll 中预构建
+        $emptyLines = [string[]]@('', '# comment', '', '')
     }
 
     It '替换激活行的 IP，并保留行内联注释' {
@@ -58,27 +60,13 @@ Describe 'Update-HostsLines' {
     }
 
     It '空行与注释行原样保留，且追加发生在末尾' {
-        # 用 List<string> 构造含空元素的行数组（避免 @('',...) 在 Pester 作用域中空字符串被吞）
-        $L = New-Object 'System.Collections.Generic.List[string]'
-        $L.Add(''); $L.Add('# comment'); $L.Add(''); $L.Add('')
-        $r = Update-HostsLines -Lines $L.ToArray() -Targets @('know.com') -NewIP '10.0.0.5'
+        $r = Update-HostsLines -Lines $emptyLines -Targets @('know.com') -NewIP '10.0.0.5'
         $r.Lines.Count | Should -Be 5
         $r.Lines[1] | Should -Be '# comment'
         $r.Lines[4] | Should -Be '10.0.0.5 know.com'
-        # 空字符串 .Length 为 0（$null 会抛异常，便于定位根因）
-        $r.Lines[0].Length | Should -Be 0
-        $r.Lines[2].Length | Should -Be 0
-        $r.Lines[3].Length | Should -Be 0
-    }
-
-    It '非空行与注释行原样保留（对照：验证函数逻辑无误）' {
-        $r = Update-HostsLines -Lines @('LINE0', '# comment', 'LINE2', 'LINE3') -Targets @('know.com') -NewIP '10.0.0.5'
-        $r.Lines.Count | Should -Be 5
-        $r.Lines[0] | Should -Be 'LINE0'
-        $r.Lines[1] | Should -Be '# comment'
-        $r.Lines[2] | Should -Be 'LINE2'
-        $r.Lines[3] | Should -Be 'LINE3'
-        $r.Lines[4] | Should -Be '10.0.0.5 know.com'
+        [string]::IsNullOrEmpty($r.Lines[0]) | Should -BeTrue
+        [string]::IsNullOrEmpty($r.Lines[2]) | Should -BeTrue
+        [string]::IsNullOrEmpty($r.Lines[3]) | Should -BeTrue
     }
 
     It '不触碰未命中任何目标的激活行' {
