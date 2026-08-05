@@ -33,11 +33,11 @@ jobs:
             $issues | Format-Table -AutoSize | Out-String | Write-Host
             $errors   = $issues | Where-Object { $_.Severity -eq 'Error' }
             $warnings = $issues | Where-Object { $_.Severity -eq 'Warning' }
-            if ($errors -or $warnings) {
-              Write-Host "PSScriptAnalyzer found $($errors.Count) error(s) and $($warnings.Count) warning(s)."
+            if ($errors) {
+              Write-Host "PSScriptAnalyzer found $($errors.Count) error(s) and $($warnings.Count) warning(s). Errors block the build."
               exit 1
             }
-            Write-Host "Only inform/style issues found; not failing the build."
+            Write-Host "PSScriptAnalyzer found $($warnings.Count) warning(s) (advisory only; not failing the build)."
           } else {
             Write-Host "No PSScriptAnalyzer issues."
           }

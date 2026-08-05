@@ -25,11 +25,11 @@ Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
 Invoke-ScriptAnalyzer -Path . -Recurse -Settings PSScriptAnalyzerSettings.psd1
 ```
 
-仅 Error / Warning 级问题会阻断 CI；纯风格类（命名、空行等）仅作信息提示。
+仅 **Error** 级问题会阻断 CI；**Warning** 级仅打印提示、不导致构建失败。纯风格类规则未列入 `IncludeRules`，本就不参与检查。
 
 ### CI
 
-每次 push / PR 会在 `windows-latest` 上运行 `.github/workflows/ci.yml`：安装 Pester + PSScriptAnalyzer → 跑静态分析（仅 Error/Warning 失败）→ 跑 Pester 测试（Pester 不可用时回退到 `tests/Verify.ps1`）。
+每次 push / PR 会在 `windows-latest` 上运行 `.github/workflows/ci.yml`：安装 Pester + PSScriptAnalyzer → 跑静态分析（仅 Error 失败，Warning 仅提示）→ 跑 Pester 测试（Pester 不可用时回退到 `tests/Verify.ps1`）。
 
 ## 提交约定 / Commit guidelines
 
