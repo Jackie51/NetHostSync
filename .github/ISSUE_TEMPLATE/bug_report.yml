@@ -1,0 +1,38 @@
+name: Bug report / 缺陷报告
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先搜索是否已有相同 Issue。谢谢！
+  - type: textarea
+    id: what
+    attributes:
+      label: 现象 / What happened
+      description: 发生了什么？与预期行为有何差别？
+      placeholder: 例如「切换 Wi-Fi 后 hosts 中 know.com 没有更新为新的 IPv4」
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 如何稳定触发该问题？
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境 / Environment
+      description: Windows 版本、PowerShell 版本（用 `$PSVersionTable.PSVersion` 查看）、是否以管理员/SYSTEM 运行、是否启用自动触发
+      placeholder: Windows 11 23H2 / PowerShell 5.1 / 管理员运行 / 已启用自动触发
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / Logs
+      description: 如有 `network_switch.log` 或相关输出，请粘贴（注意隐去 IP / 姓名等隐私）
+      render: shell

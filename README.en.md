@@ -1,5 +1,9 @@
 # NetHostSync — Auto-sync hosts on network change
 
+[![CI](https://github.com/Jackie51/NetHostSync/actions/workflows/ci.yml/badge.svg)](https://github.com/Jackie51/NetHostSync/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)](https://www.microsoft.com/windows)
+
 A lightweight, zero-dependency (pure PowerShell) Windows utility: it listens for network changes (plug/unplug cable, switch Wi-Fi, tethering hotspot) and automatically points the specified service domains in `hosts` to the **current active IPv4**. Built for developers who use Docker Desktop or local services and frequently switch between multiple networks.
 
 ## What it does

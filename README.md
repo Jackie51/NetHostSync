@@ -1,5 +1,9 @@
 # NetHostSync —— 网络切换自动同步 hosts
 
+[![CI](https://github.com/Jackie51/NetHostSync/actions/workflows/ci.yml/badge.svg)](https://github.com/Jackie51/NetHostSync/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows-blue.svg)](https://www.microsoft.com/windows)
+
 > English documentation: [README.en.md](./README.en.md) ｜ 贡献指南: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 轻量、零依赖（纯 PowerShell）的 Windows 小工具：监听网络变化（插拔网线 / 切换 Wi-Fi / 手机热点），自动把 `hosts` 中指定服务域名指向**当前活动 IPv4**。适合用 Docker Desktop、本地服务，且经常在多种网络之间切换的开发者。
