@@ -1,3 +1,4 @@
+# CI workflow: 每次 push/PR 到 main 时跑 PSScriptAnalyzer + Pester 测试
 name: CI
 
 on:
