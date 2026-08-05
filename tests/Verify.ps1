@@ -26,7 +26,10 @@ if (Test-Path $mod) {
 if (-not $fnLoaded) {
     # 内联同款实现（与 NetHostSync.psm1 同步维护）
     function Update-HostsLines {
-        param([string[]]$Lines,[string[]]$Targets,[string]$NewIP)
+        # 注意：$Lines 必须用 [object[]] 而非 [string[]]。高级函数(param())对 [string[]] 参数会逐个
+        # 校验元素，遇到空字符串('')直接报错/丢弃（hosts 文件天然含空行）。改为 [object[]] 后空串原样
+        # 保留，函数体内 .Trim()/-split 仍正常工作。须与 NetHostSync.psm1 保持一致。
+        param([object[]]$Lines,[string[]]$Targets,[string]$NewIP)
         $newLines = @(); $seen = @{}
         foreach ($line in $Lines) {
             $trimmed = $line.Trim()
@@ -79,7 +82,7 @@ $r5 = Update-HostsLines -Lines @('192.168.1.55 know.com host.docker.internal') -
 Check 'multi-host single line'            ($r5.Lines[0] -eq '10.0.0.5 know.com host.docker.internal')
 Check 'gateway appended for missing'      ($r5.Lines -contains '10.0.0.5 gateway.docker.internal')
 
-# 用 List[string] 显式保留空元素（PowerShell 数组字面量 @('','') 会丢弃空元素）
+# 用 List[string] 构造含空元素的数组（仅作可读性；真正保留空串靠函数 $Lines=[object[]] 参数）
 $L = New-Object 'System.Collections.Generic.List[string]'
 $L.Add(''); $L.Add('# comment'); $L.Add(''); $L.Add('')
 $r6 = Update-HostsLines -Lines $L.ToArray() -Targets @('know.com') -NewIP '10.0.0.5'
