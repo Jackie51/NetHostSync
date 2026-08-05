@@ -6,9 +6,6 @@
 # 文件读写、IPv4 探测、提权等副作用仍留在 .ps1 主脚本中。
 # ============================================================
 
-# 仅对外导出纯变换函数；其余辅助函数仅模块内部使用。
-Export-ModuleMember -Function Update-HostsLines
-
 <#
 .SYNOPSIS
     对 hosts 文件行集合做「未注释目标行替换 IP + 缺失追加」的纯变换。
@@ -87,3 +84,8 @@ function Update-HostsLines {
         Changes = $changes
     }
 }
+
+# 仅对外导出纯变换函数；其余辅助函数仅模块内部使用。
+# 注意：Export-ModuleMember 必须放在函数「定义之后」，
+# 否则模块加载时该函数尚不存在，会被导出为空（Import-Module 看似成功但函数不可用）。
+Export-ModuleMember -Function Update-HostsLines

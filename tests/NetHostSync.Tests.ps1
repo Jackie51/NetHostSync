@@ -5,10 +5,12 @@
 # 或（无 Pester 时）用 tests/Verify.ps1 做等价断言。
 # ============================================================
 
-$module = Join-Path $PSScriptRoot '..' 'NetHostSync.psm1'
-Import-Module $module -Force
-
 Describe 'Update-HostsLines' {
+
+    BeforeAll {
+        $module = Join-Path $PSScriptRoot '..' 'NetHostSync.psm1'
+        Import-Module $module -Force
+    }
 
     $targets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
 
