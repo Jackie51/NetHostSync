@@ -33,7 +33,13 @@ function Update-HostsLines {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [string[]]$Lines,
+        # 注意：必须用 [object[]] 而非 [string[]]。
+        # 高级函数（[CmdletBinding()]）对 [string[]] 参数会逐个校验元素，
+        # 遇到空字符串('')会直接报错 "Cannot bind argument ... because it is an empty string"。
+        # hosts 文件天然包含空行，Get-Content 读出的数组里就有 ''，
+        # 因此 [string[]] 会在真实场景（以及本用例）下崩。改为 [object[]] 后空串原样保留，
+        # 函数体内对字符串的 .Trim()/-split 仍正常工作。
+        [object[]]$Lines,
         [Parameter(Mandatory = $true)]
         [string[]]$Targets,
         [Parameter(Mandatory = $true)]

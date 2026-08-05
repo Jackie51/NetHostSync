@@ -14,7 +14,11 @@ Describe 'Update-HostsLines' {
         # Describe 顶层（BeforeAll 之外）的变量在执行阶段的 It 块中不可见，
         # 因此共享变量必须放在 BeforeAll 内。
         $targets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
-        # 同理：含空字符串的数组在 It 块内构造会被吞掉，必须在 BeforeAll 中预构建
+        # 构造一份「含真实空行/注释行」的 hosts 样本，用于验证空行原样保留。
+        # 注意：此前 case 7 在 CI 反复失败，根因不是 Pester 作用域，而是模块里
+        # Update-HostsLines 的 $Lines 参数当时是 [string[]]，PowerShell 高级函数会对数组元素
+        # 逐个校验，遇到空字符串('')直接报错/丢弃，导致函数拿不到空行。
+        # 已将参数改为 [object[]]，此处用 [string[]] 构造空行也能正确传入并保留。
         $emptyLines = [string[]]@('', '# comment', '', '')
     }
 
