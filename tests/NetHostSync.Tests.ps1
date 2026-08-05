@@ -10,9 +10,11 @@ Describe 'Update-HostsLines' {
     BeforeAll {
         $module = Join-Path $PSScriptRoot '..' 'NetHostSync.psm1'
         Import-Module $module -Force
+        # 注意：Pester 5 的 discovery 与 execution 是分离的作用域，
+        # Describe 顶层（BeforeAll 之外）的变量在执行阶段的 It 块中不可见，
+        # 因此共享变量必须放在 BeforeAll 内。
+        $targets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
     }
-
-    $targets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
 
     It '替换激活行的 IP，并保留行内联注释' {
         $r = Update-HostsLines -Lines @(
