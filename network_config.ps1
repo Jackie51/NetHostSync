@@ -1,0 +1,624 @@
+﻿# ============================================================
+# 网络配置脚本（精简版）
+# 规则：
+#   有线网络 → 默认静态 IP（可手动更改具体数值）
+#   无线网络 → 动态获取 IP（DHCP）
+# 功能：一键自动、有线静态手动更改、无线 DHCP、网络变化自动触发（含 hosts 同步刷新）、
+#        切换前备份 + 一键恢复、连通性校验、只读诊断。
+#
+# 用 PowerShell 编写，原生支持中文，不受 cmd 代码页影响。
+# 外部配置 config.json（改默认参数不用碰本脚本）。
+#
+# 用法：
+#   双击「网络配置.bat」进入交互菜单。
+#   计划任务模式：powershell -File network_config.ps1 -Auto
+#   注册/卸载自动触发：-InstallAuto / -UninstallAuto
+#   只读诊断：-Diag
+# ============================================================
+
+param(
+    [switch]$Auto,         # 静默自动模式（供计划任务/网络变化触发，不显示菜单）
+    [switch]$InstallAuto,  # 注册“网络变化自动触发”计划任务
+    [switch]$UninstallAuto, # 卸载该计划任务
+    [switch]$Diag          # 只读诊断：显示各适配器真实状态（不改任何配置）
+)
+
+$ScriptPath = $MyInvocation.MyCommand.Path
+$ScriptDir  = Split-Path -Parent $ScriptPath
+$ConfigFile = Join-Path $ScriptDir 'config.json'
+$BackupFile = Join-Path $ScriptDir 'backup.json'
+$LogFile    = Join-Path $ScriptDir 'network_switch.log'
+
+# ---------- 0. 默认网络参数（config.json 存在时以其为准） ----------
+# 有线网络默认静态配置
+$DefaultIP      = '192.168.1.100'   # 有线静态 IP
+$DefaultMask    = '255.255.255.0'    # 子网掩码
+$DefaultGateway = '192.168.1.1'      # 默认网关
+$DefaultDNS1    = '114.114.114.114'  # 首选 DNS
+$DefaultDNS2    = '101.198.198.198'  # 备用 DNS（留空则不设）
+$WiredMetric    = 10    # 有线优先级（越小越优先，配合无线 DHCP 实现有线优先）
+$WirelessMetric = 20    # 无线优先级（备用，仅作参考）
+
+# VPN / 虚拟网卡排除规则（正则）：名称命中或 Tunnel 类型一律不纳入 IP 管理，
+# 避免误改 VPN 隧道网卡（如 OpenVPN TAP、WireGuard、Cisco AnyConnect 等虚拟以太网卡）。
+# 可在 config.json 的 ExcludeAdapters 字段覆盖/扩展。
+$ExcludePattern = 'VPN|TAP|OpenVPN|WireGuard|Wintun|Cisco|AnyConnect|GlobalProtect|Forti|ZScaler|ZeroTrust|隧道|Tunnel|虚拟|WAN\s*Miniport|SoftEther|Check\s*Point|SonicWall|SSL\s*VPN'
+
+# 自动触发时是否同步刷新 hosts（调用 update_hosts.ps1，把本地服务地址指向当前 IPv4）；
+# 设为 false 可关闭；UpdateHostsScript 为脚本文件名（位于 ScriptDir 下，一般无需改动）。
+$UpdateHostsOnAuto = $true
+$UpdateHostsScript = 'update_hosts.ps1'
+# hosts 目标主机名列表（与 update_hosts.ps1 共享同一份 config.json 来源）；
+# 此处仅作文档/缺省，真正读取在 update_hosts.ps1 内完成。
+$HostsTargets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
+
+# 读取外部配置文件（若存在则覆盖默认值）
+if (Test-Path $ConfigFile) {
+    try {
+        $cfg = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($cfg.DefaultIP)      { $DefaultIP = $cfg.DefaultIP }
+        if ($cfg.DefaultMask)    { $DefaultMask = $cfg.DefaultMask }
+        if ($cfg.DefaultGateway) { $DefaultGateway = $cfg.DefaultGateway }
+        if ($cfg.DefaultDNS1)    { $DefaultDNS1 = $cfg.DefaultDNS1 }
+        if ($cfg.DefaultDNS2)    { $DefaultDNS2 = $cfg.DefaultDNS2 }
+        if ($cfg.WiredMetric)    { $WiredMetric = $cfg.WiredMetric }
+        if ($cfg.WirelessMetric) { $WirelessMetric = $cfg.WirelessMetric }
+        if ($cfg.ExcludeAdapters) { $ExcludePattern = $cfg.ExcludeAdapters }
+        if ($null -ne $cfg.UpdateHostsOnAuto) { $UpdateHostsOnAuto = [bool]$cfg.UpdateHostsOnAuto }
+        if ($cfg.UpdateHostsScript) { $UpdateHostsScript = $cfg.UpdateHostsScript }
+        if ($cfg.HostsTargets -and @($cfg.HostsTargets).Count -gt 0) { $HostsTargets = @($cfg.HostsTargets) }
+    } catch {
+        Write-Host "[警告] 读取配置文件失败，使用内置默认值：$_" -ForegroundColor Yellow
+    }
+} else {
+    # 首次运行生成默认 config.json，便于以后修改
+    $defaultCfg = [ordered]@{
+        DefaultIP      = $DefaultIP
+        DefaultMask    = $DefaultMask
+        DefaultGateway = $DefaultGateway
+        DefaultDNS1    = $DefaultDNS1
+        DefaultDNS2    = $DefaultDNS2
+        WiredMetric    = $WiredMetric
+        WirelessMetric = $WirelessMetric
+        ExcludeAdapters = $ExcludePattern
+        UpdateHostsOnAuto = $UpdateHostsOnAuto
+        UpdateHostsScript = $UpdateHostsScript
+        HostsTargets = $HostsTargets
+    }
+    $defaultCfg | ConvertTo-Json | Set-Content $ConfigFile -Encoding UTF8
+}
+
+# ---------- 1. 管理员权限自检与自动提权 ----------
+# 计划任务以 SYSTEM（/RU SYSTEM）运行时，IsInRole(Administrator) 可能返回 $false，
+# 但 SYSTEM 拥有最高权限，应直接执行；同时 SYSTEM 无法走 UAC 交互提权（会静默失败）。
+# 因此：SYSTEM 或已是管理员 -> 直接执行；仅“非管理员且非 SYSTEM”才尝试 UAC / 报错退出。
+$currentId = [Security.Principal.WindowsIdentity]::GetCurrent()
+$isSystem  = ($currentId.User.Value -eq 'S-1-5-18') -or ($currentId.Name -eq 'NT AUTHORITY\SYSTEM')
+$isAdmin   = ([Security.Principal.WindowsPrincipal]$currentId).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin -and -not $isSystem) {
+    if ($Auto -or $InstallAuto -or $UninstallAuto) {
+        # 自动/注册模式必须以管理员运行，非管理员直接退出，避免弹窗卡住后台任务
+        Write-Host '[错误] 需要以管理员身份运行（请右键“以管理员身份运行”）。' -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "[提示] 当前未以管理员身份运行，正在请求提权..." -ForegroundColor Yellow
+    Start-Process PowerShell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    exit
+}
+
+# ============================================================
+# 函数定义
+# ============================================================
+
+function Write-Log($msg) {
+    $ts = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "$ts  $msg" | Add-Content $LogFile -Encoding UTF8
+}
+
+# 用 netsh wlan 判定某适配器是否为无线（该命令只列出无线网卡，比 InterfaceType 可靠）
+function Test-Wireless($adapter) {
+    $alias = $adapter.InterfaceAlias
+    $wlan = netsh wlan show interfaces 2>$null
+    $curIf = $null; $found = $false
+    foreach ($line in $wlan) {
+        if ($line -match '^\s*Name\s*:\s*(.+?)\s*$') { $curIf = $Matches[1].Trim() }
+        if ($line -match '^\s*SSID\s*:\s*(.+?)\s*$') { if ($curIf -eq $alias) { $found = $true } }
+    }
+    if (-not $found -and $adapter.InterfaceType -eq 'Wireless80211') { $found = $true }
+    return $found
+}
+
+# 是否为应排除的适配器（VPN / 虚拟网卡）：Tunnel 类型 或 名称命中排除正则 → 不纳入 IP 管理
+function Test-Excluded($adapter) {
+    if ($adapter.InterfaceType -eq 'Tunnel') { return $true }
+    if ($adapter.InterfaceAlias -match $ExcludePattern) { return $true }
+    return $false
+}
+
+# 前缀长度 -> 点分掩码
+function ConvertTo-DottedMask($prefixLen) {
+    if (-not $prefixLen -or $prefixLen -lt 0 -or $prefixLen -gt 32) { return '255.255.255.0' }
+    $mask = 0
+    for ($i = 0; $i -lt $prefixLen; $i++) { $mask = ($mask -shl 1) -bor 1 }
+    $mask = $mask -shl (32 - $prefixLen)
+    $b1 = ($mask -shr 24) -band 255
+    $b2 = ($mask -shr 16) -band 255
+    $b3 = ($mask -shr 8)  -band 255
+    $b4 = $mask -band 255
+    return "$b1.$b2.$b3.$b4"
+}
+
+# 应用静态 IP（核心命令）
+function Apply-Static($alias, $ip, $mask, $gw, $dns1, $dns2, $wireless) {
+    $metric = if ($wireless) { $WirelessMetric } else { $WiredMetric }
+    Write-Host "  IP=$ip  掩码=$mask  网关=$gw  DNS=$dns1$(if($dns2){' / '+$dns2}else{' (无备用)'})  优先级metric=$metric"
+    Write-Host "`n正在将 [$alias] 设置为静态 IP..."
+    if ($gw) {
+        netsh interface ip set address name="$alias" static $ip $mask $gw
+    } else {
+        netsh interface ip set address name="$alias" static $ip $mask
+    }
+    if ($LASTEXITCODE -ne 0) { Write-Host "[失败] 设置静态 IP 失败，请检查输入。" -ForegroundColor Red; return $false }
+    netsh interface ip delete dns name="$alias" all 2>$null
+    netsh interface ip set dns name="$alias" static $dns1
+    if ($dns2) { netsh interface ip add dns name="$alias" $dns2 index=2 }
+    try {
+        Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -InterfaceMetric $metric -ErrorAction Stop
+        Write-Host "接口优先级已设置（metric=$metric）。" -ForegroundColor Green
+    } catch {
+        Write-Host "[提示] 设置接口优先级失败（不影响 IP/DNS）：$_" -ForegroundColor Yellow
+    }
+    Write-Host "静态 IP 设置完成。" -ForegroundColor Green
+    return $true
+}
+
+# 带提示的静态配置（手动更改用）：回车用默认值，或输入新值修改
+function Set-StaticWithPrompt($alias) {
+    Write-Host "`n【静态 IP 配置】直接回车使用默认值，或输入新值修改：" -ForegroundColor Cyan
+    $ip = Read-Host "IP 地址 [默认 $DefaultIP]"; if (-not $ip) { $ip = $DefaultIP }
+    $mask = Read-Host "子网掩码 [默认 $DefaultMask，可留空]"; if (-not $mask) { $mask = $DefaultMask }
+    $gw = Read-Host "默认网关 [默认 $DefaultGateway]"; if (-not $gw) { $gw = $DefaultGateway }
+    $dns1 = Read-Host "首选 DNS [默认 $DefaultDNS1]"; if (-not $dns1) { $dns1 = $DefaultDNS1 }
+    $dns2 = Read-Host "备用 DNS [默认 $DefaultDNS2，可留空]"; if (-not $dns2) { $dns2 = $DefaultDNS2 }
+    return (Apply-Static $alias $ip $mask $gw $dns1 $dns2 $false)
+}
+
+function Set-Dhcp($alias) {
+    Write-Host "`n正在将 [$alias] 恢复为 DHCP 动态获取..."
+    netsh interface ip set address name="$alias" dhcp
+    netsh interface ip set dns name="$alias" dhcp
+    # 显式设定无线优先级 metric=$WirelessMetric（默认 20），确保与有线(metric=10)同时连接时
+    # 系统路由确定性优先走有线（满足「有线/无线/热点同时连接时优先选用有线」）。
+    try {
+        Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -InterfaceMetric $WirelessMetric -ErrorAction Stop
+    } catch {}
+    Write-Host "DHCP 设置完成。" -ForegroundColor Green
+}
+
+# 抓取适配器当前配置（用于切换前备份）
+function Backup-Adapter($adapter) {
+    $idx = $adapter.InterfaceIndex
+    $addr = Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+    $gw = (Get-NetRoute -InterfaceIndex $idx -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Select-Object -First 1).NextHop
+    $dns = (Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
+    $isDhcp = ($addr -and $addr.PrefixOrigin -eq 'Dhcp')
+    return [ordered]@{
+        Alias   = $adapter.InterfaceAlias
+        Wireless = (Test-Wireless $adapter)
+        Dhcp     = [bool]$isDhcp
+        IP       = if ($addr) { $addr.IPAddress } else { '' }
+        Mask     = if ($addr) { $addr.PrefixLength } else { '' }
+        Gateway  = if ($gw) { $gw } else { '' }
+        DNS1     = if ($dns -and $dns.Count -ge 1) { $dns[0] } else { '' }
+        DNS2     = if ($dns -and $dns.Count -ge 2) { $dns[1] } else { '' }
+    }
+}
+
+# 从备份恢复上一次配置
+function Restore-Backup {
+    if (-not (Test-Path $BackupFile)) { Write-Host "[提示] 没有找到备份文件（尚未做过切换）。" -ForegroundColor Yellow; return }
+    try { $bk = Get-Content $BackupFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { Write-Host "[错误] 备份文件损坏：$_" -ForegroundColor Red; return }
+    $list = if ($bk -is [Array]) { $bk } else { @($bk) }
+    foreach ($e in $list) {
+        $alias = $e.Alias
+        Write-Host "`n恢复适配器 [$alias] 的上一次配置..."
+        if ($e.Dhcp) {
+            Set-Dhcp $alias
+        } else {
+            if (-not $e.IP -or -not $e.DNS1) { Write-Host "  备份中 [$alias] 的静态信息不完整，跳过。" -ForegroundColor Yellow; continue }
+            $mask = ConvertTo-DottedMask $e.Mask
+            Apply-Static $alias $e.IP $mask $e.Gateway $e.DNS1 $e.DNS2 $e.Wireless
+        }
+    }
+    Show-Result $list[0].Alias
+}
+
+# 连通性校验：ping 网关与 DNS，区分本地链路异常与无外网
+function Test-Connectivity($alias) {
+    $cfg = Get-NetIPConfiguration -InterfaceAlias $alias -ErrorAction SilentlyContinue
+    $gw = if ($cfg -and $cfg.IPv4DefaultGateway) { $cfg.IPv4DefaultGateway.NextHop } else { '' }
+    if ($Auto) { Write-Log "连通性校验 [$alias] 网关=$gw" }
+    if (-not $gw) { if (-not $Auto) { Write-Host "  [连通性] 未找到默认网关（DHCP 模式正常，无需静态网关）。" -ForegroundColor Gray }; return }
+
+    # 刚改完 IP/网关，路由与 ARP 需 1~2 秒稳定，否则 ping 会“假不可达”
+    Start-Sleep -Seconds 2
+
+    # 多重判定，避免“路由器禁 ping”或“刚配置完”导致误报
+    $arpOk = $false
+    try {
+        $arp = arp -a 2>$null
+        foreach ($line in $arp) { if ($line -match [regex]::Escape($gw) -and $line -match '([0-9a-fA-F]{2}-){5}[0-9a-fA-F]{2}') { $arpOk = $true } }
+    } catch {}
+
+    $pingGw = Test-Connection -ComputerName $gw -Count 2 -Quiet -ErrorAction SilentlyContinue
+
+    $tcpOk = $false
+    try { $tcpOk = [bool](Test-NetConnection -ComputerName $DefaultDNS1 -Port 53 -InformationLevel Quiet -WarningAction SilentlyContinue) } catch {}
+
+    if ($pingGw) { $l1 = "网关 $gw：可达 ✓" }
+    elseif ($arpOk) { $l1 = "网关 $gw：未回应 ping，但 ARP 已解析（链路正常，路由器可能禁 ping）✓" }
+    elseif ($tcpOk) { $l1 = "网关 $gw：未回应 ping，但外网 TCP 可达（链路正常）✓" }
+    else { $l1 = "网关 $gw：不可达 ✗（本地链路可能异常）" }
+
+    if ($tcpOk) { $l2 = "DNS $DefaultDNS1：可达 ✓" }
+    elseif ($pingGw) { $l2 = "DNS $DefaultDNS1：ICMP 受限，但网关可达（链路正常）✓" }
+    else { $l2 = "DNS $DefaultDNS1：不可达 ✗（可能无外网，但本地链路正常）" }
+
+    if ($Auto) { Write-Log ("  " + $l1); Write-Log ("  " + $l2) } else {
+        $c1 = if ($pingGw -or $arpOk -or $tcpOk) { 'Green' } else { 'Red' }
+        Write-Host ("  [连通性] " + $l1) -ForegroundColor $c1
+        Write-Host ("  [连通性] " + $l2) -ForegroundColor $(if($tcpOk){'Green'}else{'Yellow'})
+    }
+}
+
+function Show-Result($alias) {
+    Write-Host "`n============================================" -ForegroundColor Green
+    Write-Host "当前网络配置状态（适配器：$alias）" -ForegroundColor Green
+    Write-Host "============================================" -ForegroundColor Green
+    netsh interface ip show config name="$alias"
+    ipconfig /flushdns 2>$null | Out-Null
+    Write-Host "`n操作完成。" -ForegroundColor Green
+    Write-Host "按任意键返回主菜单..." -NoNewline
+    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    Write-Host ""
+}
+
+# 网络变化时同步刷新 hosts（调用 update_hosts.ps1）：把 config.json 中 HostsTargets 指定的
+# 目标主机名指向当前正在使用的 IPv4，仅改未注释行。由 UpdateHostsOnAuto 开关控制。
+# 以独立 powershell 进程运行（继承 SYSTEM/管理员权限，无需再提权；其子进程 exit 不影响本脚本）。
+function Invoke-HostsUpdate {
+    if (-not $UpdateHostsOnAuto) { return }
+    $updateScript = Join-Path $ScriptDir $UpdateHostsScript
+    if (-not (Test-Path $updateScript)) {
+        if (-not $Auto) { Write-Host "[提示] 未找到 $UpdateHostsScript，跳过 hosts 刷新。" -ForegroundColor Yellow }
+        Write-Log "hosts 刷新：未找到脚本 $updateScript，跳过。"
+        return
+    }
+    if ($Auto) { Write-Log "hosts 刷新：启动 $UpdateHostsScript（路径：$updateScript）..." }
+    else { Write-Host "`n[hosts] 同步更新本地服务地址（调用 $UpdateHostsScript）..." -ForegroundColor Cyan }
+    try {
+        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript 2>&1
+        $code = $LASTEXITCODE
+        if ($Auto) {
+            foreach ($l in $output) { Write-Log ("hosts 刷新： " + $l.ToString()) }
+            if ($code -eq 0) { Write-Log "hosts 刷新：完成（退出码 0）。" }
+            else { Write-Log "hosts 刷新：脚本退出码 $code（可能未检测到可用 IPv4 或无改动）。" }
+        } else {
+            foreach ($l in $output) { Write-Host ("  " + $l.ToString()) -ForegroundColor $(if($code -eq 0){'Gray'}else{'Yellow'}) }
+            if ($code -eq 0) { Write-Host "  [hosts] 刷新完成。" -ForegroundColor Green }
+            else { Write-Host "  [hosts] 刷新未完成（退出码 $code），详见 update_hosts.log。" -ForegroundColor Yellow }
+        }
+    } catch {
+        if ($Auto) { Write-Log "hosts 刷新：异常 - $($_.Exception.Message)" }
+        else { Write-Host "  [hosts] 刷新异常：$($_.Exception.Message)" -ForegroundColor Red }
+    }
+}
+
+# 自动模式核心（交互选项1 与 -Auto 共用）
+# 规则：有线 → 默认静态；无线 → DHCP 动态获取。
+# 关键：幂等、非侵入——对“已经处于目标状态”的适配器一律跳过，不重复下发指令，
+#       避免打断 Windows 正在进行的 DHCP 握手（否则切换 Wi-Fi 后无线偶发断网）。
+function Invoke-AutoConfig {
+    try {
+    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
+    if ($adapters.Count -eq 0) {
+        $msg = "未检测到已连接的网络适配器。"
+        if ($Auto) { Write-Log $msg } else { Write-Host "[错误] $msg" -ForegroundColor Red; Start-Sleep 2 }
+        return
+    }
+    $changed = @()
+    foreach ($adapter in $adapters) {
+        $alias = $adapter.InterfaceAlias
+        $idx   = $adapter.InterfaceIndex
+        $isW   = Test-Wireless $adapter
+        $medium = if ($isW) { '无线' } else { '有线' }
+        $line = "检测到适配器：$alias（$medium）"
+        if ($Auto) { Write-Log $line } else { Write-Host "`n$line" -ForegroundColor Cyan }
+        $addr = Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1
+
+        if ($isW) {
+            # 无线：仅当“当前不是 DHCP”（残留静态 IP）时才重置为 DHCP；
+            #       已是 DHCP（切换 Wi-Fi 后系统会自动续租）→ 一律不动，避免打断握手导致断网。
+            if ($addr -and $addr.PrefixOrigin -eq 'Dhcp') {
+                if ($Auto) { Write-Log "-> 无线 $alias：已是 DHCP 动态获取，跳过（不干扰）。" }
+                else { Write-Host "-> 无线 $alias：已是 DHCP，无需更改（跳过）" -ForegroundColor Gray }
+                continue
+            }
+            if ($Auto) { Write-Log "-> 无线 $alias：检测到残留静态 IP，重置为 DHCP。" }
+            else { Write-Host "-> 应用【无线 DHCP 动态获取】" -ForegroundColor Yellow }
+            $changed += Backup-Adapter $adapter
+            Set-Dhcp $alias
+        } else {
+            # 有线：仅当“当前是 DHCP”时才套默认静态；已为静态（默认或手动设定）→ 跳过，不覆盖用户设置。
+            if ($addr -and $addr.PrefixOrigin -ne 'Dhcp') {
+                if ($Auto) { Write-Log "-> 有线 $alias：已是静态（IP $($addr.IPAddress)），跳过。" }
+                else { Write-Host "-> 有线 $alias：已是静态（IP $($addr.IPAddress)），无需更改（跳过）" -ForegroundColor Gray }
+                continue
+            }
+            if ($Auto) { Write-Log "-> 有线 $alias：当前为 DHCP，应用默认静态（IP $DefaultIP）。" }
+            else { Write-Host "-> 应用【有线默认静态：$DefaultIP】" -ForegroundColor Yellow }
+            $changed += Backup-Adapter $adapter
+            Apply-Static $alias $DefaultIP $DefaultMask $DefaultGateway $DefaultDNS1 $DefaultDNS2 $false
+        }
+    }
+    # 连通性校验（针对主适配器：优先有线，否则第一个）
+    $primary = @($adapters | Where-Object { -not (Test-Wireless $_) } | Select-Object -First 1)
+    if ($primary.Count -eq 0) { $primary = @($adapters | Select-Object -First 1) }
+
+    if ($changed.Count -gt 0) {
+        $changed | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
+        Test-Connectivity $primary[0].InterfaceAlias
+        if ($Auto) { Write-Log "自动切换完成（本次实际改动适配器数：$($changed.Count)）。" }
+    } else {
+        if ($Auto) { Write-Log "自动切换：所有适配器已处于目标状态，无需改动。" }
+        else { Test-Connectivity $primary[0].InterfaceAlias }
+    }
+    # 网络配置更新后，同步刷新 hosts（指向当前 IPv4）；开关关闭则不执行
+    return $primary[0].InterfaceAlias
+    } finally {
+        # 无论 IP 配置是否改动、是否检测到适配器，网络环境已变化，始终尝试同步 hosts
+        Invoke-HostsUpdate
+    }
+}
+
+# 交互模式下的适配器选择
+function Get-ActiveAdapter {
+    $list = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
+    if ($list.Count -eq 0) { return $null }
+    if ($list.Count -eq 1) { return $list[0] }
+    Write-Host "`n检测到多个已连接的网络适配器：" -ForegroundColor Cyan
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $medium = if (Test-Wireless $list[$i]) { '无线' } else { '有线' }
+        Write-Host "  $($i+1). $($list[$i].InterfaceAlias) ($medium)"
+    }
+    $idx = 0
+    do { $sel = Read-Host "请选择要操作的适配器序号" } while (-not ([int]::TryParse($sel, [ref]$idx)) -or $idx -lt 1 -or $idx -gt $list.Count)
+    return $list[$idx - 1]
+}
+
+# 注册/卸载“网络变化自动触发”计划任务
+# 方案：把完整 schtasks /Create 命令写进一个临时 .cmd 批处理文件（cmd 原生 \" 转义），
+#   再由本脚本“无参数启动”该 .cmd。这样所有引号转义都留在 .cmd 内部由 cmd 正确解析，
+#   彻底绕开：① 早期「/TR 整串含引号被 PowerShell 破坏」；② TaskScheduler COM 的 Subscription 属性坑；
+#   ③ 手搓 XML 的 Principal 顺序/LogonType 校验雷区（用户机器上报 ServiceAccount 越界）；
+#   ④ ProcessStartInfo.Arguments 双层 CommandLineToArgvW 转义破坏内部 \" 的坑（报 'switch\… -Auto' 错参）。
+#   /TR 内的 \" 在 .cmd 里是 cmd 原生合法转义，schtasks 自身生成合规 SYSTEM 主体。
+function Install-AutoTask {
+    $taskName = 'NetworkConfigAutoSwitch'
+    $psExe    = (Get-Command powershell.exe).Source
+    # 注册前先清理：卸载同名任务 + 任何指向本目录脚本的残留脏任务，
+    # 防止早期异常注册尝试遗留多个名字不同但动作相同的任务不断累积。
+    try {
+        $t = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($t) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop }
+        @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+            $_.TaskName -ne $taskName -and $_.Actions -and (
+                ($_.Actions.Execute -like '*network_config.ps1*') -or
+                ($_.Actions.Execute -like '*update_hosts.ps1*') -or
+                ($_.Actions.Execute -like '*One-click switch*')
+            )
+        }) | ForEach-Object { Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction Stop }
+    } catch {}
+    # 启用事件通道：Microsoft-Windows-NetworkProfile/Operational 在某些系统默认未启用，
+    # 若未启用则不会记录任何事件，事件触发器永远不会触发（自动任务形同虚设）。
+    # 注册前显式启用（已启用则无害），确保网络变化事件能被计划任务捕获。
+    try {
+        & wevtutil.exe sl "Microsoft-Windows-NetworkProfile/Operational" /e:true 2>&1 | Out-Null
+        Write-Log "启用自动触发：已确保事件通道 NetworkProfile/Operational 处于启用状态。"
+    } catch {
+        Write-Log "启用自动触发：启用事件通道失败（请手动在事件查看器中启用该通道）：$($_.Exception.Message)"
+    }
+    # .cmd 内的 schtasks 命令行：/TR 用 \" 包裹含空格的脚本路径（cmd 原生转义）
+    # 触发事件：网络连接(10000) 与 网络断开(10001) 都触发，覆盖“插拔网线 / 切 Wi-Fi / 切热点”所有场景
+    $cmdLine = "schtasks /Create /TN `"$taskName`" /RU SYSTEM /SC ONEVENT" +
+                " /EC `"Microsoft-Windows-NetworkProfile/Operational`"" +
+                " /MO `"*[System[(EventID=10000) or (EventID=10001)]]`"" +
+                " /TR `"$psExe -NoProfile -ExecutionPolicy Bypass -File \`"$ScriptPath\`" -Auto`" /F"
+    $cmdFile = Join-Path $ScriptDir '_autotask.cmd'
+    try {
+        # 写入 .cmd（UTF-8 无 BOM；@echo off 避免回显命令本身）
+        [System.IO.File]::WriteAllText($cmdFile, "@echo off`r`n$cmdLine`r`n", [System.Text.UTF8Encoding]::new($false))
+        # 无参数启动该 .cmd：启动文件无参，不存在引号问题；内部转义由 cmd 解析
+        $output = & $cmdFile 2>&1
+        $code = $LASTEXITCODE
+        if ($code -eq 0) {
+            Write-Host "[成功] 已注册计划任务「$taskName」。" -ForegroundColor Green
+            Write-Host "  以后网络变化时（插拔网线/连不同 Wi-Fi）将自动切换配置（无需手动运行）。" -ForegroundColor Gray
+            Write-Host "  规则：有线→默认静态，无线→DHCP。" -ForegroundColor Gray
+            Write-Host "  日志写入：$(Split-Path -Leaf $LogFile)" -ForegroundColor Gray
+            Write-Host "  如需停用，选本菜单「停用自动触发」或运行 -UninstallAuto。" -ForegroundColor Gray
+            Write-Log "启用自动触发：成功注册计划任务 $taskName"
+            # 修正任务“电源条件”：计划任务默认「仅在交流电源下运行、断电即停止」，
+            # 笔记本拔掉电源用手机热点时会被抑制而不执行（正是 hosts 不更新的常见原因）。
+            # 改为「电池供电也可运行、切换电源不停止」，并允许错过触发后补跑。
+            try {
+                $t = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
+                $x = New-Object System.Xml.XmlDocument
+                $x.LoadXml($t.Xml)
+                $s = $x.Task.Settings
+                if ($s) {
+                    $s.DisallowStartIfOnBatteries = 'false'
+                    $s.StopIfGoingOnBatteries = 'false'
+                    $s.StartWhenAvailable = 'true'
+                    $tmpXml = Join-Path $env:TEMP ('ncs_task_.xml')
+                    $sw = New-Object System.IO.StreamWriter($tmpXml, $false, [System.Text.UnicodeEncoding]::new($false, $true))
+                    $x.Save($sw); $sw.Close()
+                    & schtasks.exe /Create /TN $taskName /XML $tmpXml /F 2>&1 | Out-Null
+                    Remove-Item $tmpXml -Force -ErrorAction SilentlyContinue
+                    Write-Host "  已关闭电池电源限制（拔电源/用热点也能触发）。" -ForegroundColor Gray
+                    Write-Log "启用自动触发：已关闭电池电源限制（DisallowStartIfOnBatteries=false, StopIfGoingOnBatteries=false）。"
+                }
+            } catch {
+                Write-Log "启用自动触发：调整电源条件失败（不影响任务注册）：$($_.Exception.Message)"
+            }
+        } else {
+            Write-Host "[失败] 注册计划任务失败（退出码 $code）：" -ForegroundColor Red
+            if ($output) { $output | ForEach-Object { Write-Host "  $($_.ToString().Trim())" -ForegroundColor Red } }
+            Write-Log "启用自动触发：失败(退出码 $code) - $($output -join ' | ')"
+        }
+    } catch {
+        Write-Host "[失败] 注册计划任务异常：$($_.Exception.Message)" -ForegroundColor Red
+        Write-Log "启用自动触发：异常 - $($_.Exception.Message)"
+    } finally {
+        Remove-Item $cmdFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Uninstall-AutoTask {
+    $taskName = 'NetworkConfigAutoSwitch'
+    $removed = @()
+    # 方式一：按确切任务名卸载（优先用 PowerShell ScheduledTask cmdlet，错误信息更清晰）
+    try {
+        $t = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+        if ($t) {
+            Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction Stop
+            $removed += $taskName
+        }
+    } catch {
+        # cmdlet 不可用或失败时回退到 schtasks
+        & schtasks.exe /Delete /TN $taskName /F 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $removed += $taskName }
+    }
+    # 方式二：扫描全部任务，清除任何「Action 指向本脚本 / hosts 脚本」的残留脏任务
+    # （早期异常注册尝试可能留下了名字不同、但动作仍指向本目录脚本的任务）
+    try {
+        $strays = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object {
+            $_.TaskName -ne $taskName -and $_.Actions -and (
+                ($_.Actions.Execute -like '*network_config.ps1*') -or
+                ($_.Actions.Execute -like '*update_hosts.ps1*') -or
+                ($_.Actions.Execute -like '*One-click switch*')
+            )
+        })
+        foreach ($s in $strays) {
+            Unregister-ScheduledTask -TaskName $s.TaskName -Confirm:$false -ErrorAction Stop
+            $removed += $s.TaskName
+        }
+    } catch {}
+    if ($removed.Count -gt 0) {
+        Write-Host "[成功] 已卸载自动触发任务：$($removed -join ', ')" -ForegroundColor Green
+        Write-Log "停用自动触发：已卸载任务 $($removed -join ', ')"
+    } else {
+        Write-Host "[提示] 未发现已注册的自动触发任务（可能之前已卸载，无需处理）。" -ForegroundColor Gray
+        Write-Log "停用自动触发：未发现已注册任务。"
+    }
+}
+
+# ============================================================
+# 只读诊断（不改任何配置）
+# ============================================================
+function Show-Diagnostics {
+    Write-Host "`n===== 网络诊断（只读，不修改任何配置）=====" -ForegroundColor Cyan
+    Write-Host "（请把下面内容原样发回，便于定位问题）" -ForegroundColor Gray
+    $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
+    if ($adapters.Count -eq 0) { Write-Host "[无] 未检测到已连接的物理适配器。" -ForegroundColor Yellow; return }
+    foreach ($adapter in $adapters) {
+        $idx = $adapter.InterfaceIndex; $alias = $adapter.InterfaceAlias
+        $isW = Test-Wireless $adapter
+        $ipCfg = Get-NetIPConfiguration -InterfaceIndex $idx -ErrorAction SilentlyContinue
+        $addr = if ($ipCfg -and $ipCfg.IPv4Address) { $ipCfg.IPv4Address | Select-Object -First 1 } else { $null }
+        $po = if ($addr) { $addr.PrefixOrigin } else { '(无地址)' }
+        $gw = if ($ipCfg -and $ipCfg.IPv4DefaultGateway) { $ipCfg.IPv4DefaultGateway.NextHop } else { '(无)' }
+        $dns = (Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
+        $dnsStr = if ($dns) { $dns -join ' / ' } else { '(无)' }
+        $willDo = if ($isW) { 'DHCP 动态获取' } else { "默认静态：$DefaultIP" }
+        Write-Host "`n--- 适配器: $alias ---" -ForegroundColor Yellow
+        Write-Host "  类型: $(if($isW){'无线'}else{'有线'})  状态: $($adapter.Status)  连接: $($adapter.MediaConnectionState)"
+        Write-Host "  PrefixOrigin: $po  当前IP: $(if($addr){$addr.IPAddress}else{'(无)'})/$(if($addr){$addr.PrefixLength}else{'?'})"
+        Write-Host "  默认网关: $gw"
+        Write-Host "  DNS: $dnsStr"
+        Write-Host "  [自动模式将执行] $willDo" -ForegroundColor Green
+    }
+    Write-Host "`n============================================" -ForegroundColor Cyan
+}
+
+# 返回主菜单前等待按键，避免结果被下一轮 Clear-Host 冲掉（“一闪而过”）
+function Pause-Return {
+    Write-Host "`n按任意键返回主菜单..." -NoNewline
+    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
+    Write-Host ""
+}
+
+# ============================================================
+# 调度分发（非交互开关）
+# ============================================================
+if ($UninstallAuto) { Uninstall-AutoTask; exit }
+if ($InstallAuto)   { Install-AutoTask;   exit }
+if ($Diag)          { Show-Diagnostics; exit }
+if ($Auto)          { Write-Log "自动模式启动（由网络变化事件触发），10 秒后执行网络配置与 hosts 刷新..."; Start-Sleep -Seconds 10; Invoke-AutoConfig; Write-Log "自动模式结束。"; exit }
+
+# ============================================================
+# 交互主循环
+# ============================================================
+while ($true) {
+    Clear-Host
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "          网络配置一键切换工具（精简版）" -ForegroundColor Cyan
+    Write-Host "============================================" -ForegroundColor Cyan
+    Write-Host "规则：有线网络 → 默认静态 IP；无线网络 → 动态获取（DHCP）。"
+    Write-Host "默认有线静态配置："
+    Write-Host "  IP $DefaultIP | 掩码 $DefaultMask | 网关 $DefaultGateway"
+    Write-Host "  DNS $DefaultDNS1 / $DefaultDNS2"
+    Write-Host "  (参数可改 config.json，无需编辑本脚本)"
+    Write-Host ""
+    Write-Host "  1. 自动切换（有线→默认静态，无线→DHCP，并同步刷新 hosts）"
+    Write-Host "  2. 设置有线静态 IP（可手动改默认值）"
+    Write-Host "  3. 设置无线为 DHCP（动态获取）"
+    Write-Host "  4. 启用 网络变化自动触发（注册计划任务）"
+    Write-Host "  5. 停用 网络变化自动触发"
+    Write-Host "  6. 恢复上一次配置（从备份）"
+    Write-Host "  7. 诊断（只读：显示各网卡真实状态，不改配置）"
+    Write-Host "  8. 退出"
+    Write-Host ""
+    $choice = Read-Host "请输入选项 [1/2/3/4/5/6/7/8]"
+    switch ($choice) {
+        '1' {
+            $pa = Invoke-AutoConfig
+            if (-not $Auto -and $pa) { Show-Result $pa }
+        }
+        '2' {
+            $adapter = Get-ActiveAdapter
+            if (-not $adapter) { Write-Host "[错误] 未检测到已连接的网络适配器。" -ForegroundColor Red; Start-Sleep 2; continue }
+            $bk = Backup-Adapter $adapter
+            $bk | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
+            if (Set-StaticWithPrompt $adapter.InterfaceAlias) {
+                Test-Connectivity $adapter.InterfaceAlias
+                Show-Result $adapter.InterfaceAlias
+            } else { Pause-Return }
+        }
+        '3' {
+            $adapter = Get-ActiveAdapter
+            if (-not $adapter) { Write-Host "[错误] 未检测到已连接的网络适配器。" -ForegroundColor Red; Start-Sleep 2; continue }
+            $bk = Backup-Adapter $adapter
+            $bk | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
+            Set-Dhcp $adapter.InterfaceAlias
+            Test-Connectivity $adapter.InterfaceAlias
+            Show-Result $adapter.InterfaceAlias
+        }
+        '4' { Install-AutoTask; Pause-Return }
+        '5' { Uninstall-AutoTask; Pause-Return }
+        '6' { Restore-Backup; Pause-Return }
+        '7' { Show-Diagnostics; Write-Host "`n按任意键返回主菜单..." -NoNewline; $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); Write-Host "" }
+        '8' { Write-Host "已退出。"; exit }
+        default { Write-Host "[错误] 输入无效，请重新选择。" -ForegroundColor Red; Start-Sleep 2 }
+    }
+}

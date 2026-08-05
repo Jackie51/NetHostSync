@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Pester & PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -RequiredVersion 5.6.1 -Force -SkipPublisherCheck -Scope CurrentUser
+          Install-Module -Name PSScriptAnalyzer -Force -SkipPublisherCheck -Scope CurrentUser
+
+      - name: Static analysis (PSScriptAnalyzer)
+        shell: pwsh
+        run: |
+          $settings = Join-Path $Env:GITHUB_WORKSPACE 'PSScriptAnalyzerSettings.psd1'
+          $files = Get-ChildItem -Path $Env:GITHUB_WORKSPACE -Include *.ps1,*.psm1 -Recurse -Exclude Verify.ps1 |
+                   Where-Object { $_.FullName -notmatch '\\tests\\' -and $_.FullName -notmatch '\\.workbuddy\\' }
+          $issues = @()
+          foreach ($f in $files) {
+            $issues += Invoke-ScriptAnalyzer -Path $f.FullName -Settings $settings -Recurse
+          }
+          if ($issues) {
+            $issues | Format-Table -AutoSize | Out-String | Write-Host
+            $errors   = $issues | Where-Object { $_.Severity -eq 'Error' }
+            $warnings = $issues | Where-Object { $_.Severity -eq 'Warning' }
+            if ($errors -or $warnings) {
+              Write-Host "PSScriptAnalyzer found $($errors.Count) error(s) and $($warnings.Count) warning(s)."
+              exit 1
+            }
+            Write-Host "Only inform/style issues found; not failing the build."
+          } else {
+            Write-Host "No PSScriptAnalyzer issues."
+          }
+
+      - name: Run tests (Pester)
+        shell: pwsh
+        run: |
+          $testFile = Join-Path $Env:GITHUB_WORKSPACE 'tests' 'NetHostSync.Tests.ps1'
+          if (Get-Command Invoke-Pester -ErrorAction SilentlyContinue) {
+            $cfg = New-PesterConfiguration
+            $cfg.Run.Path = $testFile
+            $cfg.Output.Verbosity = 'Detailed'
+            $cfg.Run.Exit = $true
+            Invoke-Pester -Configuration $cfg
+          } else {
+            Write-Host "Pester not available; falling back to tests/Verify.ps1"
+            & (Join-Path $Env:GITHUB_WORKSPACE 'tests' 'Verify.ps1')
+          }

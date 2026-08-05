@@ -1,0 +1,27 @@
+# 运行日志（本工具会产生）
+*.log
+
+# hosts 备份（理论上本项目不再生成，保留以防万一）
+hosts.*.bak
+
+# 网卡配置一键恢复备份（菜单 6 生成，非源码）
+backup.json
+
+# 运行时配置（首次运行自动生成；个人参数不进版本库）
+config.json
+
+# PowerShell 模块自动生成
+*.psm1~
+
+# WorkBuddy 项目元数据（非工具本身）
+.workbuddy/
+
+# 编辑器 / 系统
+*.swp
+Thumbs.db
+.DS_Store
+
+# 测试/调试临时产物（本地调试用，勿提交）
+_*.txt
+_logic_test*.ps1
+_verify_*.ps1

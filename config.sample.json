@@ -1,0 +1,13 @@
+{
+  "HostsTargets": ["know.com", "host.docker.internal", "gateway.docker.internal"],
+  "DefaultIP": "192.168.1.100",
+  "DefaultMask": "255.255.255.0",
+  "DefaultGateway": "192.168.1.1",
+  "DefaultDNS1": "114.114.114.114",
+  "DefaultDNS2": "101.198.198.198",
+  "WiredMetric": 10,
+  "WirelessMetric": 20,
+  "ExcludeAdapters": "VPN|TAP|OpenVPN|WireGuard|Wintun|Cisco|AnyConnect|GlobalProtect|Forti|ZScaler|ZeroTrust|Tunnel|Virtual|WAN Miniport|SoftEther|Check Point|SonicWall|SSL VPN",
+  "UpdateHostsOnAuto": true,
+  "UpdateHostsScript": "update_hosts.ps1"
+}
