@@ -58,12 +58,12 @@ Describe 'Update-HostsLines' {
     }
 
     It '空行与注释行原样保留，且追加发生在末尾' {
-        $L = New-Object 'System.Collections.Generic.List[string]'
-        $L.Add(''); $L.Add('# comment'); $L.Add(''); $L.Add('')
-        $r = Update-HostsLines -Lines $L.ToArray() -Targets @('know.com') -NewIP '10.0.0.5'
-        $r.Lines[0] | Should -Be ''
+        $r = Update-HostsLines -Lines @('', '# comment', '', '') -Targets @('know.com') -NewIP '10.0.0.5'
+        $r.Lines.Count | Should -Be 5
+        [string]::IsNullOrEmpty($r.Lines[0]) | Should -BeTrue
         $r.Lines[1] | Should -Be '# comment'
-        $r.Lines[3] | Should -Be ''
+        [string]::IsNullOrEmpty($r.Lines[2]) | Should -BeTrue
+        [string]::IsNullOrEmpty($r.Lines[3]) | Should -BeTrue
         $r.Lines[4] | Should -Be '10.0.0.5 know.com'
     }
 
