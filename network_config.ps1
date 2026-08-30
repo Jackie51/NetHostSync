@@ -386,10 +386,17 @@ function Get-ActiveAdapter {
     $list = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
     if ($list.Count -eq 0) { return $null }
     if ($list.Count -eq 1) { return $list[0] }
-    Write-Host "`n检测到多个已连接的网络适配器：" -ForegroundColor Cyan
+    Write-Host "`n检测到多个已连接的网络适配器，请选择要操作的那一张：" -ForegroundColor Cyan
     for ($i = 0; $i -lt $list.Count; $i++) {
-        $medium = if (Test-Wireless $list[$i]) { '无线' } else { '有线' }
-        Write-Host "  $($i+1). $($list[$i].InterfaceAlias) ($medium)"
+        $a = $list[$i]
+        $isWifi = Test-Wireless $a
+        $medium = if ($isWifi) { '无线' } else { '有线' }
+        $tagColor = if ($isWifi) { 'Magenta' } else { 'Yellow' }
+        $ip = (Get-NetIPAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+        Write-Host "  $($i+1). " -NoNewline
+        Write-Host "[$medium] " -ForegroundColor $tagColor -NoNewline
+        Write-Host $a.InterfaceAlias -NoNewline
+        if ($ip) { Write-Host "  当前IP: $ip" } else { Write-Host '' }
     }
     $idx = 0
     do { $sel = Read-Host "请选择要操作的适配器序号" } while (-not ([int]::TryParse($sel, [ref]$idx)) -or $idx -lt 1 -or $idx -gt $list.Count)
