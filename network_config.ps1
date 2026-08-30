@@ -604,8 +604,8 @@ function Install-AutoTask {
          确保即使事件触发器漏抓（尤其有线断开 10001 不稳定），拔线/切网后 hosts 也至多 5 分钟内自修正。
          StopAtDurationEnd=false + Duration=P1D：每天重复 24h，次日 00:00 重新计时，形成永久每5分钟循环。 -->
     <DailyTrigger>
-      <Enabled>true</Enabled>
       <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <Enabled>true</Enabled>
       <ScheduleByDay>
         <DaysInterval>1</DaysInterval>
       </ScheduleByDay>
