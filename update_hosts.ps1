@@ -92,9 +92,12 @@ function Get-PreferredIPv4 {
     })
     $pool = @()
     foreach ($a in $adapters) {
-        # 取该网卡的非链路本地(169.254) IPv4
+        # 取该网卡的非链路本地(169.254) IPv4；并要求 AddressState=Preferred（已完全连接、生效中的地址）。
+        # 关键：网卡拔线后，Windows 不会立即清除静态 IP，但会把该地址状态置为 Disconnected；
+        # 仅凭适配器 MediaConnectionState 在“拔线瞬间事件刚触发”的竞态窗口里可能仍显示 Connected，
+        # 故叠加 AddressState=Preferred 过滤，确保不会把已失效的有线静态 IP 当成“正在使用”写入 hosts。
         $addr = Get-NetIPAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                Where-Object { $_.IPAddress -notmatch '^169\.254\.' } | Select-Object -First 1
+                Where-Object { $_.IPAddress -notmatch '^169\.254\.' -and $_.AddressState -eq 'Preferred' } | Select-Object -First 1
         if (-not $addr) { continue }
         $route = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -InterfaceIndex $a.InterfaceIndex -ErrorAction SilentlyContinue |
                  Sort-Object RouteMetric | Select-Object -First 1
