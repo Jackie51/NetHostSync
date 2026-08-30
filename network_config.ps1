@@ -583,8 +583,12 @@ function Install-AutoTask {
     # 触发事件：网络连接(10000) 与 网络断开(10001) 各用独立 EventTrigger（不用 or 复合条件，
     # 因 schtasks 事件触发器对 XPath `or` 支持不可靠，常只触发第一个条件），覆盖“插拔网线 / 切 Wi-Fi / 切热点”。
     # 用 XML 注册（比 cmd 拼 schtasks 更可靠：可精确控制 EventTrigger 订阅、SYSTEM 主体、电源条件）。
-    # 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
-    # 并额外加登录(AtLogOn)/启动(AtStartup)触发器作兜底——覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
+    # 触发组合（多重兜底，确保“网络变化后 hosts 一定能自修正”）：
+    #   ① 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
+    #      这两个 EventID 各自独立 EventTrigger（不用 or 复合，schtasks 对 XPath or 支持不可靠）。
+    #   ② 登录(AtLogOn)/启动(AtStartup)触发器：覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
+    #   ③ 【定时兜底 DailyTrigger】每 5 分钟跑一次：彻底消除“事件触发器漏抓（尤其有线断开 10001 不稳定）
+    #      导致拔线后 hosts 永远不更新”的死角。脚本幂等，无变化时不写盘，开销极低。
     $xml = @"
 <?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -603,6 +607,21 @@ function Install-AutoTask {
     </EventTrigger>
     <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
     <BootTrigger><Enabled>true</Enabled></BootTrigger>
+    <!-- 定时兜底：每天 00:00 起每 5 分钟跑一次（DailyTrigger+Repetition，永久循环），
+         确保即使事件触发器漏抓（尤其有线断开 10001 不稳定），拔线/切网后 hosts 也至多 5 分钟内自修正。
+         StopAtDurationEnd=false + Duration=P1D：每天重复 24h，次日 00:00 重新计时，形成永久每5分钟循环。 -->
+    <DailyTrigger>
+      <Enabled>true</Enabled>
+      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+      <Repetition>
+        <Interval>PT5M</Interval>
+        <Duration>P1D</Duration>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </DailyTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
@@ -643,6 +662,7 @@ function Install-AutoTask {
             Write-Host "[成功] 已注册计划任务「$taskName」。" -ForegroundColor Green
             Write-Host "  以后网络变化时（插拔网线/连不同 Wi-Fi）将自动切换配置并刷新 hosts（无需手动运行）。" -ForegroundColor Gray
             Write-Host "  规则：有线→默认静态，无线→DHCP；hosts 同步刷新到当前优先 IPv4。" -ForegroundColor Gray
+            Write-Host "  触发方式：网络变化事件(即时) + 登录/启动 + 每5分钟定时兜底（拔线等事件偶发漏抓时至多5分钟内自修正）。" -ForegroundColor Gray
             Write-Host "  日志写入：$(Split-Path -Leaf $LogFile)" -ForegroundColor Gray
             Write-Host "  如需停用，选本菜单「停用自动触发」或运行 -UninstallAuto。" -ForegroundColor Gray
             Write-Host "  测试触发：管理员运行 'schtasks /Run /TN $taskName'，或 'network_config.ps1 -Auto'；" -ForegroundColor Gray

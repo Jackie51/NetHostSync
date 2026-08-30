@@ -35,4 +35,9 @@ $log = Join-Path $PSScriptRoot 'network_switch.log'
 if (Test-Path $log) { Get-Content $log -Tail 15 | ForEach-Object { Write-Host ("  " + $_) } }
 else { Write-Host "  [无] 未找到日志（说明 -Auto 从未成功跑过）。" -ForegroundColor Yellow }
 
-Write-Host "`n[操作建议] 现在去拔掉网线/切 Wi-Fi，等 10 秒，再跑一次本脚本，对比第3、4节是否新增事件/日志。"
+Write-Host "`n[操作建议]"
+Write-Host "  1) 把上面 1/2/3 节结果完整发回（尤其第3节：看拔线时是否真的出现 EventID=10001）。"
+Write-Host "  2) 触发测试：先跑一次本脚本留底；然后插上网线再拔掉（或拔掉再插上），等 10 秒，再跑一次，"
+Write-Host "     对比两次第3节事件、第4节日志是否新增。注意：必须『注册之后』再产生网络变化，新触发器才抓得到。"
+Write-Host "  3) 若事件触发偶发漏抓也没关系：新版本已加『每5分钟定时兜底』，拔线后至多5分钟内 hosts 会自动修正。"
+Write-Host "     验证定时兜底：拔线后直接等 5~6 分钟，再查 network_switch.log 是否出现新的「自动模式启动」与无线 IP。"
