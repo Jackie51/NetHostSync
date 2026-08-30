@@ -597,15 +597,8 @@ function Install-AutoTask {
     <Description>网络变化时自动切换配置并刷新 hosts（NetHostSync）</Description>
   </RegistrationInfo>
   <Triggers>
-    <EventTrigger>
-      <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10000)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
-    </EventTrigger>
-    <EventTrigger>
-      <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10001)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
-    </EventTrigger>
-    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+    <!-- 顺序必须遵循 Task Scheduler XSD：BootTrigger → CalendarTrigger(DailyTrigger) → EventTrigger → LogonTrigger，
+         否则注册报 "unexpected node"。 -->
     <BootTrigger><Enabled>true</Enabled></BootTrigger>
     <!-- 定时兜底：每天 00:00 起每 5 分钟跑一次（DailyTrigger+Repetition，永久循环），
          确保即使事件触发器漏抓（尤其有线断开 10001 不稳定），拔线/切网后 hosts 也至多 5 分钟内自修正。
@@ -622,6 +615,15 @@ function Install-AutoTask {
         <StopAtDurationEnd>false</StopAtDurationEnd>
       </Repetition>
     </DailyTrigger>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10000)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10001)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
   </Triggers>
   <Principals>
     <Principal id="Author">
