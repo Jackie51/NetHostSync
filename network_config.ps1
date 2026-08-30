@@ -129,16 +129,23 @@ function Write-Log($msg) {
 # 彻底清屏：同时清除可视区域与滚动缓冲区，避免 Windows Terminal / ConPTY 中
 # `Clear-Host` 仅清可视区导致的残影、重影问题。
 function Clear-Screen {
-    $supportsAnsi = $false
+    # 用真实 ESC 字符（[char]27）构造 ANSI 序列，跨 PowerShell 5.1 / 7 都正确生效；
+    # 注意 PowerShell 5.1 不识别 `e 转义，必须用 [char]27 才能得到真正的 ESC 字节。
+    $useAnsi = $false
     try {
-        $supportsAnsi = [System.Environment]::GetEnvironmentVariable('WT_SESSION') -or
-                        [System.Environment]::GetEnvironmentVariable('TERM') -match 'xterm|vt' -or
-                        $Host.Name -match 'ConsoleHost'
+        $useAnsi = [bool]([System.Environment]::GetEnvironmentVariable('WT_SESSION')) -or
+                   ([System.Environment]::GetEnvironmentVariable('TERM') -match 'xterm|vt') -or
+                   ($PSVersionTable.PSVersion.Major -ge 6)
     } catch {}
-    if ($supportsAnsi) {
-        [Console]::Write("`e[2J`e[3J`e[H")
-    } else {
-        Clear-Host
+    try {
+        if ($useAnsi) {
+            $esc = [char]27
+            [Console]::Write("$esc[2J$esc[3J$esc[H")
+        } else {
+            Clear-Host
+        }
+    } catch {
+        try { Clear-Host } catch {}
     }
 }
 
@@ -388,8 +395,8 @@ function Invoke-HostsUpdate {
     if ($Auto) { Write-Log "hosts 刷新：启动 $UpdateHostsScript（路径：$updateScript）..." }
     else { Write-Host "`n[hosts] 同步更新本地服务地址（调用 $UpdateHostsScript）..." -ForegroundColor Cyan }
     try {
-        # -WindowStyle Hidden 防止子进程创建可见控制台窗口，避免子进程直接写屏与父进程输出交错产生重影。
-        $output = & powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File $updateScript 2>&1
+        # 以独立 powershell 进程运行（继承 SYSTEM/管理员权限，无需再提权；输出由 2>&1 捕获后由父进程显示）。
+        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript 2>&1
         $code = $LASTEXITCODE
         if ($Auto) {
             foreach ($l in $output) { Write-Log ("hosts 刷新： " + $l.ToString()) }
@@ -705,6 +712,7 @@ while ($true) {
     Write-Host "  8. 退出"
     Write-Host ""
     $choice = Read-Host "请输入选项 [1/2/3/4/5/6/7/8]"
+    try {
     switch ($choice) {
         '1' {
             $pa = Invoke-AutoConfig
@@ -737,5 +745,11 @@ while ($true) {
         '7' { Show-Diagnostics; Write-Host "`n按任意键返回主菜单..." -NoNewline; $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); Write-Host "" }
         '8' { Write-Host "已退出。"; exit }
         default { Write-Host "[错误] 输入无效，请重新选择。" -ForegroundColor Red; Start-Sleep 2 }
+        }
+    } catch {
+        # 单选项执行出错时显示错误并返回主菜单，避免脚本静默终止导致窗口闪退
+        Write-Host "`n[异常] 执行该选项时出错，已返回主菜单：" -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor Yellow
+        Start-Sleep 3
     }
 }
