@@ -28,6 +28,7 @@ $ScriptDir  = Split-Path -Parent $ScriptPath
 $ConfigFile = Join-Path $ScriptDir 'config.json'
 $BackupFile = Join-Path $ScriptDir 'backup.json'
 $LogFile    = Join-Path $ScriptDir 'network_switch.log'
+$ScriptVersion = '1.0'
 
 # ---------- 0. 默认网络参数（config.json 存在时以其为准） ----------
 # 有线网络默认静态配置
@@ -612,14 +613,20 @@ if ($Auto)          { Write-Log "自动模式启动（由网络变化事件触�
 while ($true) {
     Clear-Host
     Write-Host "============================================" -ForegroundColor Cyan
-    Write-Host "          网络配置一键切换工具（精简版）" -ForegroundColor Cyan
+    Write-Host "    一键网络切换（静态 / 动态 / 自动）  v$ScriptVersion" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
+    $adminOK = ($isAdmin -or $isSystem)
+    $adminText = if ($adminOK) { '管理员 ✓' } else { '非管理员 ✗（无权限修改网络配置，请右键“以管理员身份运行”）' }
+    $adminColor = if ($adminOK) { 'Green' } else { 'Red' }
+    Write-Host "  权限：" -NoNewline
+    Write-Host $adminText -ForegroundColor $adminColor
+    $connAdapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
+    $wiredN = @($connAdapters | Where-Object { -not (Test-Wireless $_) }).Count
+    $wirelessN = @($connAdapters | Where-Object { Test-Wireless $_ }).Count
+    $autoOn = $false
+    try { $at = Get-ScheduledTask -TaskName 'NetworkConfigAutoSwitch' -ErrorAction SilentlyContinue; if ($at -and $at.State -ne 'Disabled') { $autoOn = $true } } catch {}
+    Write-Host "  连接：有线 $wiredN · 无线 $wirelessN ｜ 自动切换：$(if ($autoOn) { '已启用' } else { '未启用' })"
     Write-Host "规则：有线网络 → 默认静态 IP；无线网络 → 动态获取（DHCP）。"
-    Write-Host "默认有线静态配置："
-    Write-Host "  IP $DefaultIP | 掩码 $DefaultMask | 网关 $DefaultGateway"
-    Write-Host "  DNS $DefaultDNS1 / $DefaultDNS2"
-    Write-Host "  (参数可改 config.json，无需编辑本脚本)"
-    Write-Host ""
     Write-Host "  1. 自动切换（有线→默认静态，无线→DHCP，并同步刷新 hosts）"
     Write-Host "  2. 设置静态 IP（手动更改默认值）"
     Write-Host "  3. 设置动态 IP（动态获取）"
