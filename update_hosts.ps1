@@ -72,6 +72,16 @@ if (-not $isAdmin -and -not $isSystem) {
 Write-Log "update_hosts.ps1 启动（Diag=$Diag；身份: $(if($isSystem){'SYSTEM'}elseif($isAdmin){'Admin'}else{'普通用户(将尝试提权)'}))"
 
 # ---------- 1. 获取优先 / 正在使用的 IPv4 ----------
+# 区域无关判定某适配器是否为无线（与 network_config.ps1 的 Test-Wireless 保持一致的多重信号）：
+# 1) InterfaceType 为 Wireless80211 或数值 71；2) 名称命中 WLAN / WI-?FI / WIRELESS / 无线（不分大小写）。
+# 用于修正部分机器（如某些中文 Windows）把无线网卡 InterfaceType 误报为 Ethernet，
+# 导致被当成「有线」参与优先排序、最终选错 IPv4 的问题。
+function Test-WirelessAdapter($adapter) {
+    if ($adapter.InterfaceType -eq 'Wireless80211' -or $adapter.InterfaceType -eq 71) { return $true }
+    $name = "$($adapter.InterfaceAlias) $($adapter.Name)"
+    if ($name -match 'WLAN|WI-?FI|WIRELESS|无线') { return $true }
+    return $false
+}
 function Get-PreferredIPv4 {
     # 直接基于「当前已连接」的适配器探测，避免 Get-NetIPConfiguration 聚合到的残留/已断开网卡的旧网关。
     # 仅纳入：物理网卡 + 已连接(Up & Connected) + 非 Tunnel/环回 + 名称不命中 VPN 排除。
@@ -91,14 +101,15 @@ function Get-PreferredIPv4 {
         $hasGw = [bool]$route
         $pool += [PSCustomObject]@{
             IP     = $addr.IPAddress
-            IsWire = ($a.InterfaceType -ne 'Wireless80211')
+            IsWire = -not (Test-WirelessAdapter $a)
             HasGw  = $hasGw
             Metric = if ($route) { $route.RouteMetric } else { [int]::MaxValue }
         }
     }
     if ($pool.Count -eq 0) { return $null }
-    # 排序优先级：① 有默认网关（能上网）优先；② 有线优先于无线；③ 路由度量小者优先
-    $best = $pool | Sort-Object @{Expression='HasGw';Descending=$true}, @{Expression='IsWire';Descending=$true}, @{Expression='Metric';Descending=$false} | Select-Object -First 1
+    # 排序优先级：① 有线优先于无线（脚本既定目标：有线/无线同连时优先选用有线 IPv4）；
+    #             ② 同类型内，有默认网关（能上网）优先；③ 路由度量小者优先
+    $best = $pool | Sort-Object @{Expression='IsWire';Descending=$true}, @{Expression='HasGw';Descending=$true}, @{Expression='Metric';Descending=$false} | Select-Object -First 1
     return $best.IP
 }
 
