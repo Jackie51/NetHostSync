@@ -160,16 +160,19 @@ function ConvertTo-DottedMask($prefixLen) {
 function Apply-Static($alias, $ip, $mask, $gw, $dns1, $dns2, $wireless) {
     $metric = if ($wireless) { $WirelessMetric } else { $WiredMetric }
     Write-Host "  IP=$ip  掩码=$mask  网关=$gw  DNS=$dns1$(if($dns2){' / '+$dns2}else{' (无备用)'})  优先级metric=$metric"
+    # 用数字 InterfaceIndex 调 netsh，规避适配器名含前导/尾随空格导致 netsh 报“语法不正确”
+    $idx = (Get-NetAdapter -InterfaceAlias $alias -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex
+    if (-not $idx) { Write-Host "[失败] 找不到适配器 [$alias]。" -ForegroundColor Red; return $false }
     Write-Host "`n正在将 [$alias] 设置为静态 IP..."
     if ($gw) {
-        netsh interface ip set address name="$alias" static $ip $mask $gw
+        netsh interface ip set address name="$idx" static $ip $mask $gw
     } else {
-        netsh interface ip set address name="$alias" static $ip $mask
+        netsh interface ip set address name="$idx" static $ip $mask
     }
     if ($LASTEXITCODE -ne 0) { Write-Host "[失败] 设置静态 IP 失败，请检查输入。" -ForegroundColor Red; return $false }
-    netsh interface ip delete dns name="$alias" all 2>$null
-    netsh interface ip set dns name="$alias" static $dns1
-    if ($dns2) { netsh interface ip add dns name="$alias" $dns2 index=2 }
+    netsh interface ip delete dns name="$idx" all 2>$null
+    netsh interface ip set dns name="$idx" static $dns1
+    if ($dns2) { netsh interface ip add dns name="$idx" $dns2 index=2 }
     try {
         Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -InterfaceMetric $metric -ErrorAction Stop
         Write-Host "接口优先级已设置（metric=$metric）。" -ForegroundColor Green
@@ -225,9 +228,11 @@ function Set-StaticWithPrompt($alias) {
 }
 
 function Set-Dhcp($alias) {
+    $idx = (Get-NetAdapter -InterfaceAlias $alias -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex
+    if (-not $idx) { Write-Host "[失败] 找不到适配器 [$alias]。" -ForegroundColor Red; return $false }
     Write-Host "`n正在将 [$alias] 恢复为 DHCP 动态获取..."
-    netsh interface ip set address name="$alias" dhcp
-    netsh interface ip set dns name="$alias" dhcp
+    netsh interface ip set address name="$idx" dhcp
+    netsh interface ip set dns name="$idx" dhcp
     # 显式设定无线优先级 metric=$WirelessMetric（默认 20），确保与有线(metric=10)同时连接时
     # 系统路由确定性优先走有线（满足「有线/无线/热点同时连接时优先选用有线」）。
     try {
@@ -313,10 +318,11 @@ function Test-Connectivity($alias) {
 }
 
 function Show-Result($alias) {
+    $idx = (Get-NetAdapter -InterfaceAlias $alias -ErrorAction SilentlyContinue | Select-Object -First 1).InterfaceIndex
     Write-Host "`n============================================" -ForegroundColor Green
     Write-Host "当前网络配置状态（适配器：$alias）" -ForegroundColor Green
     Write-Host "============================================" -ForegroundColor Green
-    netsh interface ip show config name="$alias"
+    if ($idx) { netsh interface ip show config name="$idx" } else { Write-Host "[提示] 未找到适配器 [$alias]，无法显示配置。" -ForegroundColor Yellow }
     ipconfig /flushdns 2>$null | Out-Null
     Write-Host "`n操作完成。" -ForegroundColor Green
     Write-Host "按任意键返回主菜单..." -NoNewline
@@ -390,14 +396,21 @@ function Invoke-AutoConfig {
             $changed += Backup-Adapter $adapter
             Set-Dhcp $alias
         } else {
-            # 有线：仅当“当前是 DHCP”时才套默认静态；已为静态（默认或手动设定）→ 跳过，不覆盖用户设置。
-            if ($addr -and $addr.PrefixOrigin -ne 'Dhcp') {
+            # 有线：当前是 DHCP → 套默认静态；当前是用户静态 → 保留跳过；
+            #       当前是 APIPA(169.254.x.x 链路本地，未获有效地址) → 视为“无配置”，仍套默认静态。
+            $isApi = ($addr -and $addr.IPAddress -match '^169\.254\.')
+            if ($addr -and $addr.PrefixOrigin -ne 'Dhcp' -and -not $isApi) {
                 if ($Auto) { Write-Log "-> 有线 $alias：已是静态（IP $($addr.IPAddress)），跳过。" }
                 else { Write-Host "-> 有线 $alias：已是静态（IP $($addr.IPAddress)），无需更改（跳过）" -ForegroundColor Gray }
                 continue
             }
-            if ($Auto) { Write-Log "-> 有线 $alias：当前为 DHCP，应用默认静态（IP $DefaultIP）。" }
-            else { Write-Host "-> 应用【有线默认静态：$DefaultIP】" -ForegroundColor Yellow }
+            if ($isApi) {
+                if ($Auto) { Write-Log "-> 有线 $alias：当前为 APIPA 链路本地地址($($addr.IPAddress)，未获有效地址)，应用默认静态（IP $DefaultIP）。" }
+                else { Write-Host "-> 有线 $alias：当前为 APIPA 链路本地地址($($addr.IPAddress))，应用默认静态：$DefaultIP" -ForegroundColor Yellow }
+            } else {
+                if ($Auto) { Write-Log "-> 有线 $alias：当前为 DHCP，应用默认静态（IP $DefaultIP）。" }
+                else { Write-Host "-> 应用【有线默认静态：$DefaultIP】" -ForegroundColor Yellow }
+            }
             $changed += Backup-Adapter $adapter
             Apply-Static $alias $DefaultIP $DefaultMask $DefaultGateway $DefaultDNS1 $DefaultDNS2 $false
         }
