@@ -172,6 +172,23 @@ function Apply-Static($alias, $ip, $mask, $gw, $dns1, $dns2, $wireless) {
     return $true
 }
 
+# 分配前探活：检测目标 IPv4 是否已被本机其它网卡或局域网其它设备占用（避免 IP 冲突）
+function Test-IpInUse($ip) {
+    # 先发一个 ARP 探测（ping 填充邻居缓存），超时短
+    ping.exe -n 1 -w 800 $ip > $null 2>&1
+    try {
+        $nb = Get-NetNeighbor -IPAddress $ip -ErrorAction SilentlyContinue
+        if ($nb) {
+            foreach ($n in $nb) {
+                if ($n.LinkLayerAddress -and $n.State -ne 'Unreachable') { return $true }
+            }
+        }
+    } catch {}
+    # ICMP 探活兜底：部分设备禁 ARP 回显但响应 ping
+    try { if (Test-Connection -ComputerName $ip -Count 1 -Quiet) { return $true } } catch {}
+    return $false
+}
+
 # 带提示的静态配置（手动更改用）：回车用默认值，或输入新值修改
 function Set-StaticWithPrompt($alias) {
     Write-Host "`n【静态 IP 配置】直接回车使用默认值，或输入新值修改：" -ForegroundColor Cyan
@@ -180,6 +197,22 @@ function Set-StaticWithPrompt($alias) {
     $gw = Read-Host "默认网关 [默认 $DefaultGateway]"; if (-not $gw) { $gw = $DefaultGateway }
     $dns1 = Read-Host "首选 DNS [默认 $DefaultDNS1]"; if (-not $dns1) { $dns1 = $DefaultDNS1 }
     $dns2 = Read-Host "备用 DNS [默认 $DefaultDNS2，可留空]"; if (-not $dns2) { $dns2 = $DefaultDNS2 }
+    # 分配前探活：避免把已在使用的 IP 设成本机静态地址导致冲突
+    $cur = (Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+    if ($cur -and $cur -eq $ip) {
+        Write-Host "[提示] 网卡 [$alias] 当前已是 $ip，将保持原配置。" -ForegroundColor Yellow
+    } else {
+        if (Test-IpInUse $ip) {
+            Write-Host "[冲突] 检测到 $ip 已在局域网中使用（可能与其它设备或其它网卡撞 IP）。" -ForegroundColor Red
+            Write-Host "        若仍要应用，可能造成 IP 冲突、网络异常。" -ForegroundColor Red
+            $force = Read-Host "仍要强制应用此 IP? (y/N)"
+            if ($force -notmatch '^[Yy]$') {
+                Write-Host "已取消本次静态 IP 设置。" -ForegroundColor Yellow
+                return $false
+            }
+            Write-Host "[警告] 用户选择强制应用，存在 IP 冲突风险。" -ForegroundColor Yellow
+        }
+    }
     return (Apply-Static $alias $ip $mask $gw $dns1 $dns2 $false)
 }
 
