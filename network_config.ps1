@@ -118,15 +118,22 @@ function Write-Log($msg) {
 
 # 用 netsh wlan 判定某适配器是否为无线（该命令只列出无线网卡，比 InterfaceType 可靠）
 function Test-Wireless($adapter) {
-    $alias = $adapter.InterfaceAlias
+    # 1) 接口类型（最可靠、区域无关）：Wireless80211 枚举（值 71）即无线
+    if ($adapter.InterfaceType -eq 'Wireless80211' -or $adapter.InterfaceType -eq 71) { return $true }
+    # 2) 名称启发（不区分大小写）：WLAN / Wi-Fi / Wireless / 无线 等
+    if ($adapter.InterfaceAlias -match 'WLAN|WI-?FI|WIRELESS|无线') { return $true }
+    if ($adapter.Name -match 'WLAN|WI-?FI|WIRELESS|无线') { return $true }
+    # 3) netsh wlan show interfaces：该网卡已连 SSID 即无线。兼容中英文输出（名称/Name、:或：），名称模糊匹配。
     $wlan = netsh wlan show interfaces 2>$null
-    $curIf = $null; $found = $false
+    $curIf = $null
     foreach ($line in $wlan) {
-        if ($line -match '^\s*Name\s*:\s*(.+?)\s*$') { $curIf = $Matches[1].Trim() }
-        if ($line -match '^\s*SSID\s*:\s*(.+?)\s*$') { if ($curIf -eq $alias) { $found = $true } }
+        if ($line -match '^\s*(Name|名称)\s*[:：]\s*(.+?)\s*$') { $curIf = $Matches[2].Trim() }
+        if ($line -match '^\s*SSID\s*[:：]\s*(.+?)\s*$') {
+            $a = $adapter.InterfaceAlias
+            if ($curIf -and ($curIf -eq $a -or $curIf -like "*$a*" -or $a -like "*$curIf*")) { return $true }
+        }
     }
-    if (-not $found -and $adapter.InterfaceType -eq 'Wireless80211') { $found = $true }
-    return $found
+    return $false
 }
 
 # 是否为应排除的适配器（VPN / 虚拟网卡）：Tunnel 类型 或 名称命中排除正则 → 不纳入 IP 管理
