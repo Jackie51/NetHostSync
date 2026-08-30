@@ -579,88 +579,39 @@ function Install-AutoTask {
     } catch {
         Write-Log "启用自动触发：启用事件通道失败（请手动在事件查看器中启用该通道）：$($_.Exception.Message)"
     }
-    # .cmd 内的 schtasks 命令行：/TR 用 \" 包裹含空格的脚本路径（cmd 原生转义）
-    # 触发事件：网络连接(10000) 与 网络断开(10001) 各用独立 EventTrigger（不用 or 复合条件，
-    # 因 schtasks 事件触发器对 XPath `or` 支持不可靠，常只触发第一个条件），覆盖“插拔网线 / 切 Wi-Fi / 切热点”。
-    # 用 XML 注册（比 cmd 拼 schtasks 更可靠：可精确控制 EventTrigger 订阅、SYSTEM 主体、电源条件）。
     # 触发组合（多重兜底，确保“网络变化后 hosts 一定能自修正”）：
     #   ① 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
-    #      这两个 EventID 各自独立 EventTrigger（不用 or 复合，schtasks 对 XPath or 支持不可靠）。
+    #      两个 EventID 各自独立 EventTrigger（不用 or 复合，schtasks 对 XPath or 支持不可靠）。
     #   ② 登录(AtLogOn)/启动(AtStartup)触发器：覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
-    #   ③ 【定时兜底 DailyTrigger】每 5 分钟跑一次：彻底消除“事件触发器漏抓（尤其有线断开 10001 不稳定）
-    #      导致拔线后 hosts 永远不更新”的死角。脚本幂等，无变化时不写盘，开销极低。
-    $xml = @"
-<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Author>SYSTEM</Author>
-    <Description>网络变化时自动切换配置并刷新 hosts（NetHostSync）</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <!-- 顺序必须遵循 Task Scheduler XSD：BootTrigger → CalendarTrigger(DailyTrigger) → EventTrigger → LogonTrigger，
-         否则注册报 "unexpected node"。 -->
-    <BootTrigger><Enabled>true</Enabled></BootTrigger>
-    <!-- 定时兜底：每天 00:00 起每 5 分钟跑一次（DailyTrigger+Repetition，永久循环），
-         确保即使事件触发器漏抓（尤其有线断开 10001 不稳定），拔线/切网后 hosts 也至多 5 分钟内自修正。
-         StopAtDurationEnd=false + Duration=P1D：每天重复 24h，次日 00:00 重新计时，形成永久每5分钟循环。 -->
-    <DailyTrigger>
-      <StartBoundary>2026-01-01T00:00:00</StartBoundary>
-      <Enabled>true</Enabled>
-      <ScheduleByDay>
-        <DaysInterval>1</DaysInterval>
-      </ScheduleByDay>
-      <Repetition>
-        <Interval>PT5M</Interval>
-        <Duration>P1D</Duration>
-        <StopAtDurationEnd>false</StopAtDurationEnd>
-      </Repetition>
-    </DailyTrigger>
-    <EventTrigger>
-      <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10000)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
-    </EventTrigger>
-    <EventTrigger>
-      <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10001)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
-    </EventTrigger>
-    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>SYSTEM</UserId>
-      <RunLevel>HighestAvailable</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <StartWhenAvailable>true</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>false</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
-    <Priority>7</Priority>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>$psExe</Command>
-      <Arguments>-NoProfile -ExecutionPolicy Bypass -File "$ScriptPath" -Auto</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-"@
-    $xmlFile = Join-Path $env:TEMP ('ncs_autotask.xml')
+    #   ③ 【定时兜底】每 5 分钟跑一次（TimeTrigger + Repetition，Duration 10 年≈永久循环）：
+    #       彻底消除“事件触发器漏抓（尤其有线断开 10001 不稳定）导致拔线后 hosts 永远不更新”的死角。
+    #   改用 PowerShell Scheduled Task cmdlet（Register-ScheduledTask）构建任务对象，由系统生成合法 XML，
+    #   绕开 schtasks.exe /Create /XML 对 Calendar/Daily 触发器及其 Repetition 解析不稳定的坑
+    #   （曾反复报 “The task XML contains an unexpected node. ... DailyTrigger”）。
     try {
-        # Task Scheduler 要求 XML 任务文件为 UTF-16 LE（带 BOM）。
-        $sw = New-Object System.IO.StreamWriter($xmlFile, $false, [System.Text.UnicodeEncoding]::new($false, $true))
-        $sw.Write($xml); $sw.Close()
-        $output = & schtasks.exe /Create /TN "$taskName" /XML "$xmlFile" /F 2>&1
-        $code = $LASTEXITCODE
-        if ($code -eq 0) {
+        $action = New-ScheduledTaskAction -Execute $psExe -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -Auto"
+        # SYSTEM 服务账户主体，最高运行级别；比手搓 XML 的 Principal 更不易踩 LogonType 越界。
+        $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+        # 事件触发器：用 CIM 类 MSFT_TaskEventTrigger 直接构造 Subscription（避免 COM Subscription 属性坑）。
+        $evtClass  = Get-CimClass -ClassName MSFT_TaskEventTrigger -Namespace Root/Microsoft/Windows/TaskScheduler
+        $sub10000 = '<QueryList><Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"><Select Path="Microsoft-Windows-NetworkProfile/Operational">*[System[(EventID=10000)]]</Select></Query></QueryList>'
+        $sub10001 = '<QueryList><Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"><Select Path="Microsoft-Windows-NetworkProfile/Operational">*[System[(EventID=10001)]]</Select></Query></QueryList>'
+        $evt10000 = New-CimInstance -CimClass $evtClass -Property @{ Subscription = $sub10000; Enabled = $true } -ClientOnly
+        $evt10001 = New-CimInstance -CimClass $evtClass -Property @{ Subscription = $sub10001; Enabled = $true } -ClientOnly
+        # 登录 / 启动 触发器
+        $logonTrig = New-ScheduledTaskTrigger -AtLogOn
+        $bootTrig  = New-ScheduledTaskTrigger -AtStartup
+        # 定时兜底：每 5 分钟一次，Duration 10 年（≈永久循环；-Once 起点在过去，Repetition 从当前持续向后）。
+        $pollTrig  = New-ScheduledTaskTrigger -Once -At "2026-01-01T00:00:00" `
+                        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+        $triggers  = @($evt10000, $evt10001, $logonTrig, $bootTrig, $pollTrig)
+        # 任务设置：电池也跑、不限期停、可随时按需运行、网络可用与否都跑、多实例忽略新实例。
+        $settings  = New-ScheduledTaskSettingsSet `
+                        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable `
+                        -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -MultipleInstances IgnoreNew -Priority 7
+        $result = Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal `
+                    -Trigger $triggers -Settings $settings -Description "网络变化时自动切换配置并刷新 hosts（NetHostSync）" -Force
+        if ($result) {
             Write-Host "[成功] 已注册计划任务「$taskName」。" -ForegroundColor Green
             Write-Host "  以后网络变化时（插拔网线/连不同 Wi-Fi）将自动切换配置并刷新 hosts（无需手动运行）。" -ForegroundColor Gray
             Write-Host "  规则：有线→默认静态，无线→DHCP；hosts 同步刷新到当前优先 IPv4。" -ForegroundColor Gray
@@ -669,7 +620,7 @@ function Install-AutoTask {
             Write-Host "  如需停用，选本菜单「停用自动触发」或运行 -UninstallAuto。" -ForegroundColor Gray
             Write-Host "  测试触发：管理员运行 'schtasks /Run /TN $taskName'，或 'network_config.ps1 -Auto'；" -ForegroundColor Gray
             Write-Host "            then 查 $LogFile 是否出现「自动模式启动」、任务「上次运行结果」是否变为 0。" -ForegroundColor Gray
-            Write-Log "启用自动触发：成功注册计划任务 $taskName（EventTrigger + Logon/Boot 兜底）"
+            Write-Log "启用自动触发：成功注册计划任务 $taskName（EventTrigger×2 + Logon/Boot + 每5分钟定时兜底）"
             # ---- 自检诊断：注册成功 ≠ 能点火 ----
             # 事件通道 NetworkProfile/Operational 若未真正启用，触发器永不点火；
             # 受限环境下 wevtutil 启用可能被静默拒绝，这里回读状态并明确告警。
@@ -694,15 +645,12 @@ function Install-AutoTask {
                 Write-Log "启用自动触发：读取任务诊断信息失败：$($_.Exception.Message)"
             }
         } else {
-            Write-Host "[失败] 注册计划任务失败（退出码 $code）：" -ForegroundColor Red
-            if ($output) { $output | ForEach-Object { Write-Host "  $($_.ToString().Trim())" -ForegroundColor Red } }
-            Write-Log "启用自动触发：失败(退出码 $code) - $($output -join ' | ')"
+            Write-Host "[失败] 注册计划任务失败（Register-ScheduledTask 未返回任务对象）。" -ForegroundColor Red
+            Write-Log "启用自动触发：失败(未返回任务对象)"
         }
     } catch {
         Write-Host "[失败] 注册计划任务异常：$($_.Exception.Message)" -ForegroundColor Red
         Write-Log "启用自动触发：异常 - $($_.Exception.Message)"
-    } finally {
-        Remove-Item $xmlFile -Force -ErrorAction SilentlyContinue
     }
 }
 
