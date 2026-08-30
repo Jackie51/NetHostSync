@@ -580,7 +580,8 @@ function Install-AutoTask {
         Write-Log "启用自动触发：启用事件通道失败（请手动在事件查看器中启用该通道）：$($_.Exception.Message)"
     }
     # .cmd 内的 schtasks 命令行：/TR 用 \" 包裹含空格的脚本路径（cmd 原生转义）
-    # 触发事件：网络连接(10000) 与 网络断开(10001) 都触发，覆盖“插拔网线 / 切 Wi-Fi / 切热点”所有场景
+    # 触发事件：网络连接(10000) 与 网络断开(10001) 各用独立 EventTrigger（不用 or 复合条件，
+    # 因 schtasks 事件触发器对 XPath `or` 支持不可靠，常只触发第一个条件），覆盖“插拔网线 / 切 Wi-Fi / 切热点”。
     # 用 XML 注册（比 cmd 拼 schtasks 更可靠：可精确控制 EventTrigger 订阅、SYSTEM 主体、电源条件）。
     # 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
     # 并额外加登录(AtLogOn)/启动(AtStartup)触发器作兜底——覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
@@ -594,7 +595,11 @@ function Install-AutoTask {
   <Triggers>
     <EventTrigger>
       <Enabled>true</Enabled>
-      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10000) or (EventID=10001)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10000)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10001)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
     </EventTrigger>
     <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
     <BootTrigger><Enabled>true</Enabled></BootTrigger>
