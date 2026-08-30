@@ -126,6 +126,22 @@ function Write-Log($msg) {
     "$ts  $msg" | Add-Content $LogFile -Encoding UTF8
 }
 
+# 彻底清屏：同时清除可视区域与滚动缓冲区，避免 Windows Terminal / ConPTY 中
+# `Clear-Host` 仅清可视区导致的残影、重影问题。
+function Clear-Screen {
+    $supportsAnsi = $false
+    try {
+        $supportsAnsi = [System.Environment]::GetEnvironmentVariable('WT_SESSION') -or
+                        [System.Environment]::GetEnvironmentVariable('TERM') -match 'xterm|vt' -or
+                        $Host.Name -match 'ConsoleHost'
+    } catch {}
+    if ($supportsAnsi) {
+        [Console]::Write("`e[2J`e[3J`e[H")
+    } else {
+        Clear-Host
+    }
+}
+
 # 用 netsh wlan 判定某适配器是否为无线（该命令只列出无线网卡，比 InterfaceType 可靠）
 function Test-Wireless($adapter) {
     # 1) 接口类型（最可靠、区域无关）：Wireless80211 枚举（值 71）即无线
@@ -372,7 +388,8 @@ function Invoke-HostsUpdate {
     if ($Auto) { Write-Log "hosts 刷新：启动 $UpdateHostsScript（路径：$updateScript）..." }
     else { Write-Host "`n[hosts] 同步更新本地服务地址（调用 $UpdateHostsScript）..." -ForegroundColor Cyan }
     try {
-        $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript 2>&1
+        # -WindowStyle Hidden 防止子进程创建可见控制台窗口，避免子进程直接写屏与父进程输出交错产生重影。
+        $output = & powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File $updateScript 2>&1
         $code = $LASTEXITCODE
         if ($Auto) {
             foreach ($l in $output) { Write-Log ("hosts 刷新： " + $l.ToString()) }
@@ -662,7 +679,7 @@ if ($Auto)          { Write-Log "自动模式启动（由网络变化事件触�
 # 交互主循环
 # ============================================================
 while ($true) {
-    Clear-Host
+    Clear-Screen
     Write-Host "============================================" -ForegroundColor Cyan
     Write-Host "    一键网络切换（静态 / 动态 / 自动）  v$ScriptVersion" -ForegroundColor Cyan
     Write-Host "============================================" -ForegroundColor Cyan
