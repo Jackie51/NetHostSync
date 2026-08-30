@@ -384,6 +384,28 @@ function Show-Result($alias) {
 # 网络变化时同步刷新 hosts（调用 update_hosts.ps1）：把 config.json 中 HostsTargets 指定的
 # 目标主机名指向当前正在使用的 IPv4，仅改未注释行。由 UpdateHostsOnAuto 开关控制。
 # 以独立 powershell 进程运行（继承 SYSTEM/管理员权限，无需再提权；其子进程 exit 不影响本脚本）。
+# 等待网络就绪：切换网络（尤其手机热点 / 新 Wi-Fi）后 DHCP 可能尚未完成、IP 未分配，
+# 此时若立即刷新 hosts 会写旧 IP / APIPA 或漏更新。轮询等待「任一已连接物理适配器拿到非链路本地 IPv4」，
+# 最多等待 $TimeoutSec 秒（每 3 秒检查一次）；超时也返回（交给 update_hosts.ps1 自身重试兜底）。
+function Wait-NetworkReady {
+    param([int]$TimeoutSec = 60)
+    $elapsed = 0
+    $step    = 3
+    while ($elapsed -lt $TimeoutSec) {
+        $ready = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {
+            $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_)
+        }) | ForEach-Object {
+            $a = Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                 Where-Object { $_.IPAddress -notmatch '^169\.254\.' } | Select-Object -First 1
+            [bool]$a
+        } | Where-Object { $_ } | Select-Object -First 1
+        if ($ready) { return $elapsed }
+        Start-Sleep -Seconds $step
+        $elapsed += $step
+    }
+    return $elapsed
+}
+
 function Invoke-HostsUpdate {
     if (-not $UpdateHostsOnAuto) { return }
     $updateScript = Join-Path $ScriptDir $UpdateHostsScript
@@ -520,6 +542,16 @@ function Get-ActiveAdapter {
 #   ④ ProcessStartInfo.Arguments 双层 CommandLineToArgvW 转义破坏内部 \" 的坑（报 'switch\… -Auto' 错参）。
 #   /TR 内的 \" 在 .cmd 里是 cmd 原生合法转义，schtasks 自身生成合规 SYSTEM 主体。
 function Install-AutoTask {
+    # 权限守卫：注册 SYSTEM 计划任务 + 启用事件通道都需要管理员。
+    # 菜单路径（菜单 4）下 $InstallAuto 为 $false，不会走脚本开头的提权检查，
+    # 因此这里单独兜底——非管理员时自动以 RunAs 重启脚本并带 -InstallAuto 完成注册，
+    # 避免“普通用户静默注册”导致 wevtutil/schtasks 失败、任务注册了却从不点火。
+    if (-not ($isAdmin -or $isSystem)) {
+        Write-Host '[提示] 注册计划任务需要管理员权限，正在请求提权...' -ForegroundColor Yellow
+        Start-Process PowerShell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -InstallAuto"
+        Write-Host '已在新窗口以管理员身份完成注册流程，完成后按任意键返回主菜单。' -ForegroundColor Gray
+        return
+    }
     $taskName = 'NetworkConfigAutoSwitch'
     $psExe    = (Get-Command powershell.exe).Source
     # 注册前先清理：卸载同名任务 + 任何指向本目录脚本的残留脏任务，
@@ -531,7 +563,10 @@ function Install-AutoTask {
             $_.TaskName -ne $taskName -and $_.Actions -and (
                 ($_.Actions.Execute -like '*network_config.ps1*') -or
                 ($_.Actions.Execute -like '*update_hosts.ps1*') -or
-                ($_.Actions.Execute -like '*One-click switch*')
+                ($_.Actions.Arguments -like '*network_config.ps1*') -or
+                ($_.Actions.Arguments -like '*update_hosts.ps1*') -or
+                ($_.Actions.Execute -like '*One-click switch*') -or
+                ($_.Actions.Arguments -like '*One-click switch*')
             )
         }) | ForEach-Object { Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction Stop }
     } catch {}
@@ -546,46 +581,90 @@ function Install-AutoTask {
     }
     # .cmd 内的 schtasks 命令行：/TR 用 \" 包裹含空格的脚本路径（cmd 原生转义）
     # 触发事件：网络连接(10000) 与 网络断开(10001) 都触发，覆盖“插拔网线 / 切 Wi-Fi / 切热点”所有场景
-    $cmdLine = "schtasks /Create /TN `"$taskName`" /RU SYSTEM /SC ONEVENT" +
-                " /EC `"Microsoft-Windows-NetworkProfile/Operational`"" +
-                " /MO `"*[System[(EventID=10000) or (EventID=10001)]]`"" +
-                " /TR `"$psExe -NoProfile -ExecutionPolicy Bypass -File \`"$ScriptPath\`" -Auto`" /F"
-    $cmdFile = Join-Path $ScriptDir '_autotask.cmd'
+    # 用 XML 注册（比 cmd 拼 schtasks 更可靠：可精确控制 EventTrigger 订阅、SYSTEM 主体、电源条件）。
+    # 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
+    # 并额外加登录(AtLogOn)/启动(AtStartup)触发器作兜底——覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
+    $xml = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>SYSTEM</Author>
+    <Description>网络变化时自动切换配置并刷新 hosts（NetHostSync）</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>&lt;QueryList&gt;&lt;Query Id="0" Path="Microsoft-Windows-NetworkProfile/Operational"&gt;&lt;Select Path="Microsoft-Windows-NetworkProfile/Operational"&gt;*[System[(EventID=10000) or (EventID=10001)]]&lt;/Select&gt;&lt;/Query&gt;&lt;/QueryList&gt;</Subscription>
+    </EventTrigger>
+    <LogonTrigger><Enabled>true</Enabled></LogonTrigger>
+    <BootTrigger><Enabled>true</Enabled></BootTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>SYSTEM</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$psExe</Command>
+      <Arguments>-NoProfile -ExecutionPolicy Bypass -File "$ScriptPath" -Auto</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+    $xmlFile = Join-Path $env:TEMP ('ncs_autotask.xml')
     try {
-        # 写入 .cmd（UTF-8 无 BOM；@echo off 避免回显命令本身）
-        [System.IO.File]::WriteAllText($cmdFile, "@echo off`r`n$cmdLine`r`n", [System.Text.UTF8Encoding]::new($false))
-        # 无参数启动该 .cmd：启动文件无参，不存在引号问题；内部转义由 cmd 解析
-        $output = & $cmdFile 2>&1
+        # Task Scheduler 要求 XML 任务文件为 UTF-16 LE（带 BOM）。
+        $sw = New-Object System.IO.StreamWriter($xmlFile, $false, [System.Text.UnicodeEncoding]::new($false, $true))
+        $sw.Write($xml); $sw.Close()
+        $output = & schtasks.exe /Create /TN "$taskName" /XML "$xmlFile" /F 2>&1
         $code = $LASTEXITCODE
         if ($code -eq 0) {
             Write-Host "[成功] 已注册计划任务「$taskName」。" -ForegroundColor Green
-            Write-Host "  以后网络变化时（插拔网线/连不同 Wi-Fi）将自动切换配置（无需手动运行）。" -ForegroundColor Gray
-            Write-Host "  规则：有线→默认静态，无线→DHCP。" -ForegroundColor Gray
+            Write-Host "  以后网络变化时（插拔网线/连不同 Wi-Fi）将自动切换配置并刷新 hosts（无需手动运行）。" -ForegroundColor Gray
+            Write-Host "  规则：有线→默认静态，无线→DHCP；hosts 同步刷新到当前优先 IPv4。" -ForegroundColor Gray
             Write-Host "  日志写入：$(Split-Path -Leaf $LogFile)" -ForegroundColor Gray
             Write-Host "  如需停用，选本菜单「停用自动触发」或运行 -UninstallAuto。" -ForegroundColor Gray
-            Write-Log "启用自动触发：成功注册计划任务 $taskName"
-            # 修正任务“电源条件”：计划任务默认「仅在交流电源下运行、断电即停止」，
-            # 笔记本拔掉电源用手机热点时会被抑制而不执行（正是 hosts 不更新的常见原因）。
-            # 改为「电池供电也可运行、切换电源不停止」，并允许错过触发后补跑。
+            Write-Host "  测试触发：管理员运行 'schtasks /Run /TN $taskName'，或 'network_config.ps1 -Auto'；" -ForegroundColor Gray
+            Write-Host "            then 查 $LogFile 是否出现「自动模式启动」、任务「上次运行结果」是否变为 0。" -ForegroundColor Gray
+            Write-Log "启用自动触发：成功注册计划任务 $taskName（EventTrigger + Logon/Boot 兜底）"
+            # ---- 自检诊断：注册成功 ≠ 能点火 ----
+            # 事件通道 NetworkProfile/Operational 若未真正启用，触发器永不点火；
+            # 受限环境下 wevtutil 启用可能被静默拒绝，这里回读状态并明确告警。
             try {
-                $t = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-                $x = New-Object System.Xml.XmlDocument
-                $x.LoadXml($t.Xml)
-                $s = $x.Task.Settings
-                if ($s) {
-                    $s.DisallowStartIfOnBatteries = 'false'
-                    $s.StopIfGoingOnBatteries = 'false'
-                    $s.StartWhenAvailable = 'true'
-                    $tmpXml = Join-Path $env:TEMP ('ncs_task_.xml')
-                    $sw = New-Object System.IO.StreamWriter($tmpXml, $false, [System.Text.UnicodeEncoding]::new($false, $true))
-                    $x.Save($sw); $sw.Close()
-                    & schtasks.exe /Create /TN $taskName /XML $tmpXml /F 2>&1 | Out-Null
-                    Remove-Item $tmpXml -Force -ErrorAction SilentlyContinue
-                    Write-Host "  已关闭电池电源限制（拔电源/用热点也能触发）。" -ForegroundColor Gray
-                    Write-Log "启用自动触发：已关闭电池电源限制（DisallowStartIfOnBatteries=false, StopIfGoingOnBatteries=false）。"
+                $chRaw = & wevtutil.exe gl "Microsoft-Windows-NetworkProfile/Operational" 2>&1 | Out-String
+                if ($chRaw -match 'enabled:\s*true') {
+                    Write-Host '  [自检] 事件通道 NetworkProfile/Operational 已启用 ✓（网络变化可触发）。' -ForegroundColor Green
+                } else {
+                    Write-Host '  [警告] 事件通道 NetworkProfile/Operational 未启用！自动触发将无法点火。' -ForegroundColor Red
+                    Write-Host '    解决：事件查看器 → 应用程序和服务日志 → Microsoft → Windows → NetworkProfile → Operational → 右键“启用日志”。' -ForegroundColor Yellow
+                    Write-Log '启用自动触发：自检发现事件通道未启用（自动触发不会点火）。'
                 }
             } catch {
-                Write-Log "启用自动触发：调整电源条件失败（不影响任务注册）：$($_.Exception.Message)"
+                Write-Log "启用自动触发：自检事件通道状态失败：$($_.Exception.Message)"
+            }
+            # 打印任务“上次运行结果 / 下次运行时间 / 触发器”，便于现场确认是否真的跑过
+            try {
+                & schtasks.exe /Query /TN $taskName /V /FO LIST 2>&1 | Where-Object {
+                    $_ -match '上次运行|Last Result|下次运行|Next Run|触发器|Trigger'
+                } | ForEach-Object { Write-Host "  [任务] $_" -ForegroundColor Gray }
+            } catch {
+                Write-Log "启用自动触发：读取任务诊断信息失败：$($_.Exception.Message)"
             }
         } else {
             Write-Host "[失败] 注册计划任务失败（退出码 $code）：" -ForegroundColor Red
@@ -596,7 +675,7 @@ function Install-AutoTask {
         Write-Host "[失败] 注册计划任务异常：$($_.Exception.Message)" -ForegroundColor Red
         Write-Log "启用自动触发：异常 - $($_.Exception.Message)"
     } finally {
-        Remove-Item $cmdFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $xmlFile -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -680,7 +759,16 @@ function Pause-Return {
 if ($UninstallAuto) { Uninstall-AutoTask; exit }
 if ($InstallAuto)   { Install-AutoTask;   exit }
 if ($Diag)          { Show-Diagnostics; exit }
-if ($Auto)          { Write-Log "自动模式启动（由网络变化事件触发），10 秒后执行网络配置与 hosts 刷新..."; Start-Sleep -Seconds 10; Invoke-AutoConfig; Write-Log "自动模式结束。"; exit }
+if ($Auto)          {
+    Write-Log "自动模式启动（由网络变化事件触发）..."
+    # 切换网络后先等待 IP 就绪（最多 60 秒），避免 hosts 刷到旧 IP / APIPA 或漏更新；
+    # 即使超时也继续，由 update_hosts.ps1 自带的重试进一步兜底。
+    $waited = Wait-NetworkReady -TimeoutSec 60
+    Write-Log "自动模式：网络就绪等待完成（耗时 ${waited}s），开始刷新网络配置与 hosts。"
+    Invoke-AutoConfig
+    Write-Log "自动模式结束。"
+    exit
+}
 
 # ============================================================
 # 交互主循环
