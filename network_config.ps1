@@ -30,6 +30,16 @@ $BackupFile = Join-Path $ScriptDir 'backup.json'
 $LogFile    = Join-Path $ScriptDir 'network_switch.log'
 $ScriptVersion = '1.0'
 
+# ---------- 0. 控制台编码：修复 netsh 等原生命令的中文输出乱码 ----------
+# 在 UTF-8 控制台（如 Windows Terminal / 系统已开启 UTF-8 支持）下，netsh 输出的是
+# UTF-8 字节；若 PowerShell 仍按 GBK(936) 解码，就会变成“璇ヨ……”之类的乱码。
+# 这里统一把控制台切到 UTF-8(65001)，并让 PowerShell 以 UTF-8 解码，彻底消除乱码。
+# 仅作用于当前控制台会话，不改系统设置、不写注册表。
+try {
+    $null = chcp 65001 2>$null
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+} catch {}
+
 # ---------- 0. 默认网络参数（config.json 存在时以其为准） ----------
 # 有线网络默认静态配置
 $DefaultIP      = '192.168.1.100'   # 有线静态 IP
@@ -322,7 +332,25 @@ function Show-Result($alias) {
     Write-Host "`n============================================" -ForegroundColor Green
     Write-Host "当前网络配置状态（适配器：$alias）" -ForegroundColor Green
     Write-Host "============================================" -ForegroundColor Green
-    if ($idx) { netsh interface ip show config name="$idx" } else { Write-Host "[提示] 未找到适配器 [$alias]，无法显示配置。" -ForegroundColor Yellow }
+    if (-not $idx) {
+        Write-Host "[提示] 未找到适配器 [$alias]，无法显示配置。" -ForegroundColor Yellow
+    } else {
+        # 用 PowerShell 原生对象读取，避免 netsh 中文输出乱码（区域/代码页无关）
+        $addr = Get-NetIPAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.InterfaceAlias -eq $alias } | Select-Object -First 1
+        $gw   = (Get-NetRoute -InterfaceIndex $idx -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+                Where-Object { $_.InterfaceAlias -eq $alias } | Select-Object -First 1).NextHop
+        $dns  = (Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.InterfaceAlias -eq $alias }).ServerAddresses
+        $ip   = if ($addr) { "$($addr.IPAddress)/$($addr.PrefixLength)" } else { '(无 IPv4)' }
+        $type = if ($addr -and $addr.PrefixOrigin -eq 'Dhcp') { 'DHCP 动态获取' } else { '静态 IP' }
+        $gwStr   = if ($gw) { $gw } else { '(无)' }
+        $dnsStr  = if ($dns -and $dns.Count -gt 0) { $dns -join ' / ' } else { '(无)' }
+        Write-Host ("  IP 地址    : " + $ip)
+        Write-Host ("  获取方式   : " + $type)
+        Write-Host ("  默认网关   : " + $gwStr)
+        Write-Host ("  DNS 服务器 : " + $dnsStr)
+    }
     ipconfig /flushdns 2>$null | Out-Null
     Write-Host "`n操作完成。" -ForegroundColor Green
     Write-Host "按任意键返回主菜单..." -NoNewline
