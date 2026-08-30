@@ -192,12 +192,12 @@ function Test-IpInUse($ip) {
 
 # 带提示的静态配置（手动更改用）：回车用默认值，或输入新值修改
 function Set-StaticWithPrompt($alias) {
-    Write-Host "`n【静态 IP 配置】直接回车使用默认值，或输入新值修改：" -ForegroundColor Cyan
-    $ip = Read-Host "IP 地址 [默认 $DefaultIP]"; if (-not $ip) { $ip = $DefaultIP }
-    $mask = Read-Host "子网掩码 [默认 $DefaultMask，可留空]"; if (-not $mask) { $mask = $DefaultMask }
-    $gw = Read-Host "默认网关 [默认 $DefaultGateway]"; if (-not $gw) { $gw = $DefaultGateway }
-    $dns1 = Read-Host "首选 DNS [默认 $DefaultDNS1]"; if (-not $dns1) { $dns1 = $DefaultDNS1 }
-    $dns2 = Read-Host "备用 DNS [默认 $DefaultDNS2，可留空]"; if (-not $dns2) { $dns2 = $DefaultDNS2 }
+    Write-Host "`n【静态 IP 配置】直接回车使用默认值，或输入新值修改（任一提示输入 q 取消并返回主菜单）：" -ForegroundColor Cyan
+    $ip = Read-Host "IP 地址 [默认 $DefaultIP]（输入 q 取消）"; if ($ip -eq 'q') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; return $false }; if (-not $ip) { $ip = $DefaultIP }
+    $mask = Read-Host "子网掩码 [默认 $DefaultMask，可留空]（输入 q 取消）"; if ($mask -eq 'q') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; return $false }; if (-not $mask) { $mask = $DefaultMask }
+    $gw = Read-Host "默认网关 [默认 $DefaultGateway]（输入 q 取消）"; if ($gw -eq 'q') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; return $false }; if (-not $gw) { $gw = $DefaultGateway }
+    $dns1 = Read-Host "首选 DNS [默认 $DefaultDNS1]（输入 q 取消）"; if ($dns1 -eq 'q') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; return $false }; if (-not $dns1) { $dns1 = $DefaultDNS1 }
+    $dns2 = Read-Host "备用 DNS [默认 $DefaultDNS2，可留空]（输入 q 取消）"; if ($dns2 -eq 'q') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; return $false }; if (-not $dns2) { $dns2 = $DefaultDNS2 }
     # 分配前探活：避免把已在使用的 IP 设成本机静态地址导致冲突
     $cur = (Get-NetIPAddress -InterfaceAlias $alias -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
     if ($cur -and $cur -eq $ip) {
@@ -433,7 +433,10 @@ function Get-ActiveAdapter {
         if ($ip) { Write-Host "  当前IP: $ip" } else { Write-Host '' }
     }
     $idx = 0
-    do { $sel = Read-Host "请选择要操作的适配器序号" } while (-not ([int]::TryParse($sel, [ref]$idx)) -or $idx -lt 1 -or $idx -gt $list.Count)
+    do {
+        $sel = Read-Host "请选择要操作的适配器序号（输入 q 取消返回主菜单）"
+        if ($sel -eq 'q') { return '__CANCEL__' }
+    } while (-not ([int]::TryParse($sel, [ref]$idx)) -or $idx -lt 1 -or $idx -gt $list.Count)
     return $list[$idx - 1]
 }
 
@@ -644,6 +647,7 @@ while ($true) {
         }
         '2' {
             $adapter = Get-ActiveAdapter
+            if ($adapter -eq '__CANCEL__') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; Start-Sleep 1; continue }
             if (-not $adapter) { Write-Host "[错误] 未检测到已连接的网络适配器。" -ForegroundColor Red; Start-Sleep 2; continue }
             $bk = Backup-Adapter $adapter
             $bk | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
@@ -654,6 +658,7 @@ while ($true) {
         }
         '3' {
             $adapter = Get-ActiveAdapter
+            if ($adapter -eq '__CANCEL__') { Write-Host "已取消，返回主菜单。" -ForegroundColor Yellow; Start-Sleep 1; continue }
             if (-not $adapter) { Write-Host "[错误] 未检测到已连接的网络适配器。" -ForegroundColor Red; Start-Sleep 2; continue }
             $bk = Backup-Adapter $adapter
             $bk | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
