@@ -21,7 +21,6 @@ $core = @(
     'config.json',          # 运行配置（个人参数，不进版本库，但部署时需要）
     'config.sample.json',   # 配置模板
     '网络配置.bat',         # 双击启动菜单（英文 ASCII，无残影）
-    '网络配置-GUI.bat',     # 双击启动图形界面（中文 WinForms，无残影）
     'deploy\DEPLOY.md'      # 部署清单（复制到包内根）
 )
 
