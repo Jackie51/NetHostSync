@@ -11,7 +11,7 @@
 | `NetHostSync.psm1` | hosts 变换模块(被 `update_hosts.ps1` 引用,走测试过的实现) |
 | `config.json` | 运行配置(主机名列表、排除网卡等);个人参数,不进版本库 |
 | `config.sample.json` | 配置模板(改 HostsTargets 后改名为 config.json 即可) |
-| `网络配置.bat` | 双击启动菜单(已带 `-ExecutionPolicy Bypass`,无需改系统策略) |
+| `NetHostSync.bat` | 双击启动菜单(已带 `-ExecutionPolicy Bypass`,无需改系统策略) |
 
 > 四个脚本靠"脚本所在目录"互相定位,**必须放在同一个文件夹**里。
 
@@ -23,7 +23,7 @@
    - `HostsTargets`:要同步的本地服务主机名(默认 `know.com` / `host.docker.internal` / `gateway.docker.internal`)
    - `ExcludeAdapters`:排除 VPN/虚拟网卡的正则
    - `UpdateHostsOnAuto`:自动触发时是否刷新 hosts
-3. **以管理员身份**运行 `网络配置.bat` → 选菜单 **4** 注册计划任务。
+3. **以管理员身份**运行 `NetHostSync.bat` → 选菜单 **4** 注册计划任务。
    任务名 `NetworkConfigAutoSwitch`,包含:网络变化事件触发(秒级)+ 登录/启动 + 每 5 分钟兜底。
 4. 验证:拔/插网线或切 Wi-Fi,查同目录 `network_switch.log` 是否出现「自动模式启动」及正确 IP。
 
@@ -36,4 +36,4 @@
 
 ## 卸载
 
-`网络配置.bat` → 菜单「停用自动触发」(或运行 `network_config.ps1 -UninstallAuto`)即可卸载计划任务。
+`NetHostSync.bat` → 菜单「停用自动触发」(或运行 `network_config.ps1 -UninstallAuto`)即可卸载计划任务。

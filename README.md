@@ -35,7 +35,7 @@
 - `network_config.ps1` —— 网络配置 + 自动触发主脚本
 - `update_hosts.ps1` —— hosts 同步脚本
 - `config.json` —— 配置文件（首次运行自动生成；想知道字段含义见 [`config.sample.json`](./config.sample.json)）
-- `网络配置.bat` / `更新hosts.bat` —— 可选启动器
+- `NetHostSync.bat` / `更新hosts.bat` —— 可选启动器
 
 > 想先看清楚 `hosts` 会被怎样处理？参考 [`hosts.sample`](./hosts.sample)。
 
@@ -56,7 +56,7 @@
 
 ### 交互菜单
 
-双击 `网络配置.bat`（或右键以管理员运行 `network_config.ps1`），菜单：
+双击 `NetHostSync.bat`（或右键以管理员运行 `network_config.ps1`），菜单：
 
 - `1` 自动切换（有线→默认静态，无线→DHCP，并刷新 hosts）
 - `2` 设置有线静态

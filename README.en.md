@@ -34,7 +34,7 @@ Put these files in the **same folder** (no dependencies to install):
 - `update_hosts.ps1` — hosts sync script
 - `NetHostSync.psm1` — unit-testable pure transform logic (imported by `update_hosts.ps1`)
 - `config.json` — configuration (auto-generated on first run; see [`config.sample.json`](./config.sample.json) for the field meanings)
-- `网络配置.bat` / `更新hosts.bat` — optional launchers
+- `NetHostSync.bat` / `更新hosts.bat` — optional launchers
 
 > Curious how your `hosts` will be transformed? See the annotated [`hosts.sample`](./hosts.sample).
 
@@ -55,7 +55,7 @@ Tip: the current `ExcludeAdapters` uses literal-space matching for "WAN Miniport
 
 ### Interactive menu
 
-Double-click `网络配置.bat` (or right-click `network_config.ps1` → Run as administrator). Menu:
+Double-click `NetHostSync.bat` (or right-click `network_config.ps1` → Run as administrator). Menu:
 
 - `1` Auto-switch (wired → default static, wireless → DHCP, and refresh hosts)
 - `2` Set wired static

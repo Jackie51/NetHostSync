@@ -10,7 +10,7 @@
 # 外部配置 config.json（改默认参数不用碰本脚本）。
 #
 # 用法：
-#   双击「网络配置.bat」进入交互菜单（英文 ASCII，无残影）。
+#   双击「NetHostSync.bat」进入交互菜单（英文 ASCII，无残影）。
 #   计划任务模式：powershell -File network_config.ps1 -Auto
 #   注册/卸载自动触发：-InstallAuto / -UninstallAuto
 #   只读诊断：-Diag
