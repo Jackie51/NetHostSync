@@ -12,6 +12,7 @@
 | `config.json` | 运行配置(主机名列表、排除网卡等);个人参数,不进版本库 |
 | `config.sample.json` | 配置模板(改 HostsTargets 后改名为 config.json 即可) |
 | `NetHostSync.bat` | 双击启动菜单(已带 `-ExecutionPolicy Bypass`,无需改系统策略) |
+| `update-hosts.bat` | hosts 手动刷新启动器(已带 `-ExecutionPolicy Bypass`) |
 
 > 四个脚本靠"脚本所在目录"互相定位,**必须放在同一个文件夹**里。
 

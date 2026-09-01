@@ -18,9 +18,10 @@ $core = @(
     'network_config.ps1',
     'update_hosts.ps1',
     'NetHostSync.psm1',
-    'config.json',          # 运行配置（个人参数，不进版本库，但部署时需要）
+    'config.json',          # 运行配置（个人参数，不进版本库；缺失时由 config.sample.json 生成）
     'config.sample.json',   # 配置模板
     'NetHostSync.bat',         # 双击启动菜单（英文 ASCII，无残影）
+    'update-hosts.bat',        # hosts 手动刷新启动器（英文 ASCII）
     'deploy\DEPLOY.md'      # 部署清单（复制到包内根）
 )
 
@@ -30,7 +31,18 @@ $optional = @('diag_autotrigger.ps1')
 $missing = @()
 foreach ($rel in ($core + $optional)) {
     $src = Join-Path $root $rel
-    if (-not (Test-Path $src)) { $missing += $rel; continue }
+    if (-not (Test-Path $src)) {
+        # config.json 不进版本库，全新克隆时根目录没有它；用模板生成一份，保证部署包开箱即用
+        if ($rel -eq 'config.json') {
+            $sample = Join-Path $root 'config.sample.json'
+            if (Test-Path $sample) {
+                Copy-Item $sample -Destination (Join-Path $out 'config.json') -Force
+                Write-Host "config.json not found in repo; generated config.json from config.sample.json" -ForegroundColor Yellow
+                continue
+            }
+        }
+        $missing += $rel; continue
+    }
     # DEPLOY.md 复制后落到包根（去掉 deploy\ 前缀）
     if ($rel -eq 'deploy\DEPLOY.md') {
         Copy-Item $src -Destination (Join-Path $out 'DEPLOY.md') -Force

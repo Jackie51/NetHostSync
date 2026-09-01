@@ -35,7 +35,7 @@
 - `network_config.ps1` —— 网络配置 + 自动触发主脚本
 - `update_hosts.ps1` —— hosts 同步脚本
 - `config.json` —— 配置文件（首次运行自动生成；想知道字段含义见 [`config.sample.json`](./config.sample.json)）
-- `NetHostSync.bat` / `更新hosts.bat` —— 可选启动器
+- `NetHostSync.bat` / `update-hosts.bat` —— 可选启动器
 
 > 想先看清楚 `hosts` 会被怎样处理？参考 [`hosts.sample`](./hosts.sample)。
 
@@ -76,7 +76,7 @@
 
 ### hosts 同步
 
-- 手动刷新：右键以管理员运行 `更新hosts.bat`（或直接 `update_hosts.ps1`）
+- 手动刷新：右键以管理员运行 `update-hosts.bat`（或直接 `update_hosts.ps1`）
 - 只读诊断（不需管理员）：`powershell -File update_hosts.ps1 -Diag`
 - 临时指定条目（不写配置）：`powershell -File update_hosts.ps1 -HostEntries a.local,b.local`
 

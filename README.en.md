@@ -34,7 +34,7 @@ Put these files in the **same folder** (no dependencies to install):
 - `update_hosts.ps1` — hosts sync script
 - `NetHostSync.psm1` — unit-testable pure transform logic (imported by `update_hosts.ps1`)
 - `config.json` — configuration (auto-generated on first run; see [`config.sample.json`](./config.sample.json) for the field meanings)
-- `NetHostSync.bat` / `更新hosts.bat` — optional launchers
+- `NetHostSync.bat` / `update-hosts.bat` — optional launchers
 
 > Curious how your `hosts` will be transformed? See the annotated [`hosts.sample`](./hosts.sample).
 
@@ -75,7 +75,7 @@ Double-click `NetHostSync.bat` (or right-click `network_config.ps1` → Run as a
 
 ### hosts sync
 
-- Manual refresh: right-click `更新hosts.bat` (or directly `update_hosts.ps1`) → Run as administrator
+- Manual refresh: right-click `update-hosts.bat` (or directly `update_hosts.ps1`) → Run as administrator
 - Read-only diagnostics (no admin needed): `powershell -File update_hosts.ps1 -Diag`
 - Temporary entries (not written to config): `powershell -File update_hosts.ps1 -HostEntries a.local,b.local`
 
