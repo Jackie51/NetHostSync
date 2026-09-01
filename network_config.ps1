@@ -742,16 +742,25 @@ function Show-Gui {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
 
+    # 让 WinForms 在高分屏/缩放环境下不被系统虚拟化拉伸，避免控件被挤出可视区
+    try {
+        $dpiType = Add-Type -MemberDefinition @'
+            [DllImport("user32.dll")]
+            public static extern bool SetProcessDPIAware();
+'@ -Name DpiUtil -Namespace NetHostSync -PassThru -ErrorAction Stop
+        $null = $dpiType::SetProcessDPIAware()
+    } catch {}
+
     $script:busy = $false
     $script:adapters = @()
     $script:ipFields = @{}
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "NetHostSync 网络配置  v$ScriptVersion"
-    $form.Size = New-Object System.Drawing.Size(560, 810)
+    $form.Size = New-Object System.Drawing.Size(560, 820)
     $form.StartPosition = 'CenterScreen'
     $form.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
-    $form.BackColor = [System.Drawing.Color]::FromArgb(245,247,250)
+    # 不设置 BackColor：使用系统默认，避免按钮与背景色融为一体
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
 
@@ -802,7 +811,7 @@ function Show-Gui {
     $btnAuto.ForeColor = [System.Drawing.Color]::White
     $form.Controls.Add($btnAuto)
 
-    # ---- 次级操作按钮 ----
+    # ---- 次级操作按钮（用 TableLayoutPanel 自动排列，避免 DPI/坐标问题）----
     $btnSpecs = @(
         @{ t='② 有线->静态IP'; c={ Run-Static } },
         @{ t='③ 无线->DHCP';   c={ Run-Dhcp } },
@@ -813,22 +822,36 @@ function Show-Gui {
         @{ t='⑧ 退出';         c={ $form.Close() } }
     )
     $script:actionButtons = @()
+
+    $tlp = New-Object System.Windows.Forms.TableLayoutPanel
+    $tlp.Location = New-Object System.Drawing.Point(20, 236)
+    $tlp.Size = New-Object System.Drawing.Size(500, 152)
+    $tlp.ColumnCount = 2
+    $tlp.RowCount = 4
+    $tlp.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 50))) | Out-Null
+    $tlp.ColumnStyles.Add((New-Object System.Windows.Forms.ColumnStyle('Percent', 50))) | Out-Null
+    for ($r = 0; $r -lt 4; $r++) { $tlp.RowStyles.Add((New-Object System.Windows.Forms.RowStyle('Percent', 25))) | Out-Null }
+    $tlp.Padding = New-Object System.Windows.Forms.Padding(0)
+    $tlp.Margin = New-Object System.Windows.Forms.Padding(0)
+    $form.Controls.Add($tlp)
+
     for ($i = 0; $i -lt $btnSpecs.Count; $i++) {
-        $r = [math]::Floor($i / 2); $col = $i % 2
+        $r = [math]::Floor($i / 2); $c = $i % 2
         $b = New-Object System.Windows.Forms.Button
         $b.Text = $btnSpecs[$i].t
         $b.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
-        $b.Location = New-Object System.Drawing.Point(20 + $col * 260, 238 + $r * 40)
-        $b.Size = New-Object System.Drawing.Size(240, 34)
+        $b.Dock = 'Fill'
+        $b.Margin = New-Object System.Windows.Forms.Padding(4)
         $b.Add_Click($btnSpecs[$i].c)
-        $form.Controls.Add($b)
+        $tlp.Controls.Add($b, $c, $r)
         $script:actionButtons += $b
     }
+
 
     # ---- 静态IP 输入区 ----
     $grpIp = New-Object System.Windows.Forms.GroupBox
     $grpIp.Text = '静态IP（可选，留空用默认；仅②用到）'
-    $grpIp.Location = New-Object System.Drawing.Point(20,404)
+    $grpIp.Location = New-Object System.Drawing.Point(20,394)
     $grpIp.Size = New-Object System.Drawing.Size(500,126)
     $form.Controls.Add($grpIp)
 
@@ -860,39 +883,39 @@ function Show-Gui {
     # ---- 目标网卡选择（②⑥⑦ 用到）----
     $lblAdp = New-Object System.Windows.Forms.Label
     $lblAdp.Text = '目标网卡:'
-    $lblAdp.Location = New-Object System.Drawing.Point(20,542)
+    $lblAdp.Location = New-Object System.Drawing.Point(20,528)
     $lblAdp.Size = New-Object System.Drawing.Size(70,18)
     $lblAdp.AutoSize = $false
     $form.Controls.Add($lblAdp)
 
     $combo = New-Object System.Windows.Forms.ComboBox
     $combo.DropDownStyle = 'DropDownList'
-    $combo.Location = New-Object System.Drawing.Point(95,540)
+    $combo.Location = New-Object System.Drawing.Point(95,526)
     $combo.Size = New-Object System.Drawing.Size(330,23)
     $form.Controls.Add($combo)
 
     $btnRefreshAdp = New-Object System.Windows.Forms.Button
     $btnRefreshAdp.Text = '刷新网卡'
-    $btnRefreshAdp.Location = New-Object System.Drawing.Point(435,539)
+    $btnRefreshAdp.Location = New-Object System.Drawing.Point(435,525)
     $btnRefreshAdp.Size = New-Object System.Drawing.Size(80,24)
     $form.Controls.Add($btnRefreshAdp)
 
     # ---- 日志区 ----
     $lblLog = New-Object System.Windows.Forms.Label
     $lblLog.Text = '运行日志'
-    $lblLog.Location = New-Object System.Drawing.Point(20,572)
+    $lblLog.Location = New-Object System.Drawing.Point(20,556)
     $lblLog.Size = New-Object System.Drawing.Size(400,18)
     $lblLog.AutoSize = $false
     $form.Controls.Add($lblLog)
 
     $btnClear = New-Object System.Windows.Forms.Button
     $btnClear.Text = '清空日志'
-    $btnClear.Location = New-Object System.Drawing.Point(420,570)
+    $btnClear.Location = New-Object System.Drawing.Point(420,554)
     $btnClear.Size = New-Object System.Drawing.Size(100,22)
     $form.Controls.Add($btnClear)
 
     $rtb = New-Object System.Windows.Forms.RichTextBox
-    $rtb.Location = New-Object System.Drawing.Point(20,594)
+    $rtb.Location = New-Object System.Drawing.Point(20,576)
     $rtb.Size = New-Object System.Drawing.Size(500,170)
     $rtb.ReadOnly = $true
     $rtb.Font = New-Object System.Drawing.Font('Consolas', 9)
