@@ -296,8 +296,8 @@ function Backup-Adapter($adapter) {
 
 # 从备份恢复上一次配置
 function Restore-Backup {
-    if (-not (Test-Path $BackupFile)) { Write-Host "[TIP] no backup file found (no switch performed yet)." -ForegroundColor Yellow; return }
-    try { $bk = Get-Content $BackupFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { Write-Host "[ERROR] backup file corrupted:$_" -ForegroundColor Red; return }
+    if (-not (Test-Path $BackupFile)) { Write-Host "[TIP] no backup file found (no switch performed yet)." -ForegroundColor Yellow; Pause-Return; return }
+    try { $bk = Get-Content $BackupFile -Raw -Encoding UTF8 | ConvertFrom-Json } catch { Write-Host "[ERROR] backup file corrupted:$_" -ForegroundColor Red; Pause-Return; return }
     $list = if ($bk -is [Array]) { $bk } else { @($bk) }
     foreach ($e in $list) {
         $alias = $e.Alias
@@ -789,7 +789,7 @@ while ($true) {
         }
         '4' { Install-AutoTask; Pause-Return }
         '5' { Uninstall-AutoTask; Pause-Return }
-        '6' { Restore-Backup; Pause-Return }
+        '6' { Restore-Backup }
         '7' { Show-Diagnostics; Write-Host "`npress any key to return to main menu..." -NoNewline; $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); Write-Host "" }
         '8' { Write-Host "exited."; exit }
         default { Write-Host "[ERROR] invalid input, please choose again." -ForegroundColor Red; Start-Sleep 2 }
