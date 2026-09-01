@@ -64,12 +64,12 @@ if (-not $isAdmin -and -not $isSystem) {
     if ($Diag) {
         # 诊断只读，无需提权
     } else {
-        Write-Host "[提示] 修改 hosts 需要管理员权限，正在请求提权..." -ForegroundColor Yellow
+        Write-Host "[TIP] modifying hosts requires administrator rights, requesting elevation..." -ForegroundColor Yellow
         Start-Process PowerShell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
         exit
     }
 }
-Write-Log "update_hosts.ps1 启动（Diag=$Diag；身份: $(if($isSystem){'SYSTEM'}elseif($isAdmin){'Admin'}else{'普通用户(将尝试提权)'}))"
+Write-Log "update_hosts.ps1 started(Diag=$Diag; identity: $(if($isSystem){'SYSTEM'}elseif($isAdmin){'Admin'}else{'standard user (will attempt elevation)'}))"
 
 # ---------- 1. 获取优先 / 正在使用的 IPv4 ----------
 # 区域无关判定某适配器是否为无线（与 network_config.ps1 的 Test-Wireless 保持一致的多重信号）：
@@ -123,22 +123,22 @@ for ($attempt = 1; $attempt -le 6; $attempt++) {
     $newIP = Get-PreferredIPv4
     if ($newIP) { break }
     if ($attempt -lt 6) {
-        if (-not $Diag) { Write-Host "  第 $attempt 次未探测到 IPv4，3 秒后重试..." -ForegroundColor Gray }
-        Write-Log "第 $attempt 次未探测到 IPv4，3 秒后重试..."
+        if (-not $Diag) { Write-Host "  attempt ${attempt}: no IPv4 detected, retrying in 3s..." -ForegroundColor Gray }
+        Write-Log "attempt ${attempt}: no IPv4 detected, retrying in 3s..."
         Start-Sleep -Seconds 3
     }
 }
 if (-not $newIP) {
-    Write-Host "[错误] 未检测到可用的 IPv4 地址，无法更新 hosts。" -ForegroundColor Red
-    Write-Log "未检测到可用 IPv4，终止（已重试 6 次）。"
+    Write-Host "[ERROR] no usable IPv4 address detected, cannot update hosts." -ForegroundColor Red
+    Write-Log "no usable IPv4 detected, aborting (retried 6 times)."
     exit 1
 }
-Write-Host "检测到当前网络 IPv4（优先 / 正在使用）：$newIP" -ForegroundColor Cyan
-Write-Log "检测到 IPv4：$newIP"
+Write-Host "current network IPv4 (preferred / in use) detected:$newIP" -ForegroundColor Cyan
+Write-Log "IPv4 detected:$newIP"
 
 # ---------- 2. 诊断模式：只读展示 ----------
 if ($Diag) {
-    Write-Host "`n===== hosts 相关行（只读）=====" -ForegroundColor Cyan
+    Write-Host "`n===== hosts related lines (read-only)=====" -ForegroundColor Cyan
     if (Test-Path $HostsPath) {
         foreach ($line in (Get-Content $HostsPath -Encoding UTF8)) {
             $trimmed = $line.Trim()
@@ -147,19 +147,19 @@ if ($Diag) {
             $hosts = $tokens | Where-Object { $_ -and $_ -ne '#' -and -not $_.StartsWith('#') } | Select-Object -Skip 1
             $hit = ($hosts | Where-Object { $Targets -contains $_ }).Count -gt 0
             if ($hit) {
-                $mark = if ($isC) { '（注释，将保留）' } else { "（将更新 IP -> $newIP）" }
+                $mark = if ($isC) { '(commented, kept)' } else { "(will update IP -> $newIP)" }
                 Write-Host ("  " + $line + "  " + $mark) -ForegroundColor $(if ($isC) { 'Gray' } else { 'Yellow' })
             }
         }
     }
     Write-Host "================================" -ForegroundColor Cyan
-    Write-Host "诊断完成，未做任何修改。" -ForegroundColor Green
+    Write-Host "diagnostics done, no changes made." -ForegroundColor Green
     exit 0
 }
 
 # ---------- 3. 读 hosts、仅更新未注释的目标行 ----------
 if (-not (Test-Path $HostsPath)) {
-    Write-Host "[错误] 找不到 hosts 文件：$HostsPath" -ForegroundColor Red
+    Write-Host "[ERROR] hosts file not found:$HostsPath" -ForegroundColor Red
     exit 1
 }
 
@@ -175,12 +175,12 @@ if ($UseModule) {
             $oldIp  = $m.Groups[1].Value
             $newIp2 = $m.Groups[2].Value
             $hosts  = $m.Groups[3].Value
-            Write-Host "  更新：$oldIp -> $newIp2  ($hosts)" -ForegroundColor Green
-            Write-Log "更新行：$oldIp -> $newIp2 ($hosts)"
+            Write-Host "  updated:$oldIp -> $newIp2  ($hosts)" -ForegroundColor Green
+            Write-Log "updated line:$oldIp -> $newIp2 ($hosts)"
         } else {
             $tail = $c.Substring(5)                         # "新IP host"
-            Write-Host "  追加：$tail" -ForegroundColor Yellow
-            Write-Log "追加行：$tail"
+            Write-Host "  appended:$tail" -ForegroundColor Yellow
+            Write-Log "appended line:$tail"
         }
     }
 } else {
@@ -207,8 +207,8 @@ if ($UseModule) {
             $prefix  = $line.Substring(0, $idx)
             $rest    = $line.Substring($idx + $ipTok.Length)
             $newLines += ($prefix + $newIP + $rest)
-            Write-Host "  更新：$ipTok -> $newIP  ($($matched -join ', '))" -ForegroundColor Green
-            Write-Log "更新行：$ipTok -> $newIP ($($matched -join ', '))"
+            Write-Host "  updated:$ipTok -> $newIP  ($($matched -join ', '))" -ForegroundColor Green
+            Write-Log "updated line:$ipTok -> $newIP ($($matched -join ', '))"
         } else {
             $newLines += $line
         }
@@ -217,8 +217,8 @@ if ($UseModule) {
     foreach ($t in $Targets) {
         if (-not $seen[$t]) {
             $newLines += "$newIP $t"
-            Write-Host "  追加：$newIP $t" -ForegroundColor Yellow
-            Write-Log "追加行：$newIP $t"
+            Write-Host "  appended:$newIP $t" -ForegroundColor Yellow
+            Write-Log "appended line:$newIP $t"
         }
     }
 }
@@ -232,13 +232,13 @@ else {
     }
 }
 if (-not $changed) {
-    Write-Host "`nhosts 无需更新（当前已为 $newIP，内容无变化），跳过写入。" -ForegroundColor Gray
-    Write-Log "hosts 无需更新（当前已为 $newIP，内容无变化，跳过写入）。"
+    Write-Host "`nhosts needs no update (already $newIP, content unchanged), skipping write." -ForegroundColor Gray
+    Write-Log "hosts needs no update (already $newIP, content unchanged), skipping write."
     exit 0
 }
 
 # 写回（直接覆盖，UTF-8 无 BOM，避免给 hosts 添加 BOM 头导致部分工具解析异常；不生成任何备份文件）
 [System.IO.File]::WriteAllLines($HostsPath, [string[]]$newLines, [System.Text.UTF8Encoding]::new($false))
 
-Write-Host "`nhosts 更新完成（已直接覆盖写入，无备份）。" -ForegroundColor Green
-Write-Log "hosts 更新完成（直接覆盖写入，指向 $newIP）。"
+Write-Host "`nhosts update complete (overwritten directly, no backup)." -ForegroundColor Green
+Write-Log "hosts update complete (overwritten directly, pointing to $newIP)."

@@ -162,7 +162,7 @@ function Test-Wireless($adapter) {
     $curIf = $null
     foreach ($line in $wlan) {
         if ($line -match '^\s*(Name|名称)\s*[:：]\s*(.+?)\s*$') { $curIf = $Matches[2].Trim() }
-        if ($line -match '^\s*SSID\s*[:：]\s*(.+?)\s*$') {
+        if ($line -match '^\s*SSID\s*[::]\s*(.+?)\s*$') {
             $a = $adapter.InterfaceAlias
             if ($curIf -and ($curIf -eq $a -or $curIf -like "*$a*" -or $a -like "*$curIf*")) { return $true }
         }
@@ -317,7 +317,7 @@ function Restore-Backup {
 function Test-Connectivity($alias) {
     $cfg = Get-NetIPConfiguration -InterfaceAlias $alias -ErrorAction SilentlyContinue
     $gw = if ($cfg -and $cfg.IPv4DefaultGateway) { $cfg.IPv4DefaultGateway.NextHop } else { '' }
-    if ($Auto) { Write-Log "连通性校验 [$alias] 网关=$gw" }
+    if ($Auto) { Write-Log "connectivity check [$alias] gateway=$gw" }
     if (-not $gw) { if (-not $Auto) { Write-Host "  [connectivity] no default gateway found (normal in DHCP mode, no static gateway needed)." -ForegroundColor Gray }; return }
 
     # 刚改完 IP/网关，路由与 ARP 需 1~2 秒稳定，否则 ping 会“假不可达”
@@ -412,26 +412,26 @@ function Invoke-HostsUpdate {
     $updateScript = Join-Path $ScriptDir $UpdateHostsScript
     if (-not (Test-Path $updateScript)) {
         if (-not $Auto) { Write-Host "[TIP] not found $UpdateHostsScript, skipping hosts refresh." -ForegroundColor Yellow }
-        Write-Log "hosts 刷新：未找到脚本 $updateScript，跳过。"
+        Write-Log "hosts sync: script not found: $updateScript,skipping."
         return
     }
-    if ($Auto) { Write-Log "hosts 刷新：启动 $UpdateHostsScript（路径：$updateScript）..." }
+    if ($Auto) { Write-Log "hosts sync: launching $UpdateHostsScript(path: $updateScript)..." }
     else { Write-Host "`n[hosts] syncing local service addresses (calling $UpdateHostsScript)..." -ForegroundColor Cyan }
     try {
         # 以独立 powershell 进程运行（继承 SYSTEM/管理员权限，无需再提权；输出由 2>&1 捕获后由父进程显示）。
         $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updateScript 2>&1
         $code = $LASTEXITCODE
         if ($Auto) {
-            foreach ($l in $output) { Write-Log ("hosts 刷新： " + $l.ToString()) }
-            if ($code -eq 0) { Write-Log "hosts 刷新：完成（退出码 0）。" }
-            else { Write-Log "hosts 刷新：脚本退出码 $code（可能未检测到可用 IPv4 或无改动）。" }
+            foreach ($l in $output) { Write-Log ("hosts sync:  " + $l.ToString()) }
+            if ($code -eq 0) { Write-Log "hosts sync: done (exit code 0)." }
+            else { Write-Log "hosts sync: script exit code $code (no usable IPv4 detected or no change)." }
         } else {
             foreach ($l in $output) { Write-Host ("  " + $l.ToString()) -ForegroundColor $(if($code -eq 0){'Gray'}else{'Yellow'}) }
             if ($code -eq 0) { Write-Host "  [hosts] refresh complete." -ForegroundColor Green }
             else { Write-Host "  [hosts] refresh incomplete (exit code $code), see update_hosts.log." -ForegroundColor Yellow }
         }
     } catch {
-        if ($Auto) { Write-Log "hosts 刷新：异常 - $($_.Exception.Message)" }
+        if ($Auto) { Write-Log "hosts sync: exception - $($_.Exception.Message)" }
         else { Write-Host "  [hosts] refresh error:$($_.Exception.Message)" -ForegroundColor Red }
     }
 }
@@ -462,11 +462,11 @@ function Invoke-AutoConfig {
             # 无线：仅当“当前不是 DHCP”（残留静态 IP）时才重置为 DHCP；
             #       已是 DHCP（切换 Wi-Fi 后系统会自动续租）→ 一律不动，避免打断握手导致断网。
             if ($addr -and $addr.PrefixOrigin -eq 'Dhcp') {
-                if ($Auto) { Write-Log "-> 无线 $alias：已是 DHCP 动态获取，跳过（不干扰）。" }
+                if ($Auto) { Write-Log "-> wireless ${alias}: already DHCP, skipping (no interference)." }
                 else { Write-Host "-> wireless ${alias}:already DHCP, no change (skipped)" -ForegroundColor Gray }
                 continue
             }
-            if ($Auto) { Write-Log "-> 无线 $alias：检测到残留静态 IP，重置为 DHCP。" }
+            if ($Auto) { Write-Log "-> wireless ${alias}: leftover static IP detected, resetting to DHCP." }
             else { Write-Host "-> applying[Wireless DHCP dynamic]" -ForegroundColor Yellow }
             $changed += Backup-Adapter $adapter
             Set-Dhcp $alias
@@ -475,15 +475,15 @@ function Invoke-AutoConfig {
             #       当前是 APIPA(169.254.x.x 链路本地，未获有效地址) → 视为“无配置”，仍套默认静态。
             $isApi = ($addr -and $addr.IPAddress -match '^169\.254\.')
             if ($addr -and $addr.PrefixOrigin -ne 'Dhcp' -and -not $isApi) {
-                if ($Auto) { Write-Log "-> 有线 $alias：已是静态（IP $($addr.IPAddress)），跳过。" }
+                if ($Auto) { Write-Log "-> wired ${alias}: already static (IP $($addr.IPAddress)), skipping." }
                 else { Write-Host "-> wired ${alias}:already static (IP $($addr.IPAddress)), no change (skipped)" -ForegroundColor Gray }
                 continue
             }
             if ($isApi) {
-                if ($Auto) { Write-Log "-> 有线 $alias：当前为 APIPA 链路本地地址($($addr.IPAddress)，未获有效地址)，应用默认静态（IP $DefaultIP）。" }
+                if ($Auto) { Write-Log "-> wired ${alias}: current APIPA link-local address ($($addr.IPAddress), no valid address obtained), applying default static (IP $DefaultIP)." }
                 else { Write-Host "-> wired ${alias}:currently APIPA link-local ($($addr.IPAddress)), applying default static: $DefaultIP" -ForegroundColor Yellow }
             } else {
-                if ($Auto) { Write-Log "-> 有线 $alias：当前为 DHCP，应用默认静态（IP $DefaultIP）。" }
+                if ($Auto) { Write-Log "-> wired ${alias}: current DHCP, applying default static (IP $DefaultIP)." }
                 else { Write-Host "-> applying[Wired default static:$DefaultIP]" -ForegroundColor Yellow }
             }
             $changed += Backup-Adapter $adapter
@@ -497,9 +497,9 @@ function Invoke-AutoConfig {
     if ($changed.Count -gt 0) {
         $changed | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
         Test-Connectivity $primary[0].InterfaceAlias
-        if ($Auto) { Write-Log "自动切换完成（本次实际改动适配器数：$($changed.Count)）。" }
+        if ($Auto) { Write-Log "auto-switch complete (adapters actually changed this run: $($changed.Count))." }
     } else {
-        if ($Auto) { Write-Log "自动切换：所有适配器已处于目标状态，无需改动。" }
+        if ($Auto) { Write-Log "auto-switch: all adapters already at target state, no change needed." }
         else { Test-Connectivity $primary[0].InterfaceAlias }
     }
     # 网络配置更新后，同步刷新 hosts（指向当前 IPv4）；开关关闭则不执行
@@ -576,9 +576,9 @@ function Install-AutoTask {
     # 注册前显式启用（已启用则无害），确保网络变化事件能被计划任务捕获。
     try {
         & wevtutil.exe sl "Microsoft-Windows-NetworkProfile/Operational" /e:true 2>&1 | Out-Null
-        Write-Log "启用自动触发：已确保事件通道 NetworkProfile/Operational 处于启用状态。"
+        Write-Log "enable auto-trigger: event channel NetworkProfile/Operational confirmed enabled."
     } catch {
-        Write-Log "启用自动触发：启用事件通道失败（请手动在事件查看器中启用该通道）：$($_.Exception.Message)"
+        Write-Log "enable auto-trigger: failed to enable event channel (enable it manually in Event Viewer):$($_.Exception.Message)"
     }
     # 触发组合（多重兜底，确保“网络变化后 hosts 一定能自修正”）：
     #   ① 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
@@ -621,7 +621,7 @@ function Install-AutoTask {
             Write-Host "  to disable, choose 'Disable auto-trigger' in this menu or run -UninstallAuto." -ForegroundColor Gray
             Write-Host "  test trigger: run as admin 'schtasks /Run /TN $taskName', or 'network_config.ps1 -Auto';" -ForegroundColor Gray
             Write-Host "            then check $LogFile for'Auto mode started', task'Last Run Result'becomes 0." -ForegroundColor Gray
-            Write-Log "启用自动触发：成功注册计划任务 $taskName（EventTrigger×2 + Logon/Boot + 每5分钟定时兜底）"
+            Write-Log "enable auto-trigger: scheduled task registered successfully: $taskName (EventTrigger x2 + Logon/Boot + every-5-min polling fallback)"
             # ---- 自检诊断：注册成功 ≠ 能点火 ----
             # 事件通道 NetworkProfile/Operational 若未真正启用，触发器永不点火；
             # 受限环境下 wevtutil 启用可能被静默拒绝，这里回读状态并明确告警。
@@ -632,10 +632,10 @@ function Install-AutoTask {
                 } else {
                     Write-Host '  [WARN] event channel NetworkProfile/Operational NOT enabled! auto-trigger will not fire.' -ForegroundColor Red
                     Write-Host '    fix:Event Viewer -> Applications and Services Logs -> Microsoft -> Windows -> NetworkProfile -> Operational -> right-click 'Enable Log'.' -ForegroundColor Yellow
-                    Write-Log '启用自动触发：自检发现事件通道未启用（自动触发不会点火）。'
+                    Write-Log 'enable auto-trigger: self-check found event channel disabled (auto-trigger will not fire).'
                 }
             } catch {
-                Write-Log "启用自动触发：自检事件通道状态失败：$($_.Exception.Message)"
+                Write-Log "enable auto-trigger: failed to read event channel status:$($_.Exception.Message)"
             }
             # 打印任务“上次运行结果 / 下次运行时间 / 触发器”，便于现场确认是否真的跑过
             try {
@@ -643,15 +643,15 @@ function Install-AutoTask {
                     $_ -match '上次运行|Last Result|下次运行|Next Run|触发器|Trigger'
                 } | ForEach-Object { Write-Host "  [TASK] $_" -ForegroundColor Gray }
             } catch {
-                Write-Log "启用自动触发：读取任务诊断信息失败：$($_.Exception.Message)"
+                Write-Log "enable auto-trigger: failed to read task diagnostics:$($_.Exception.Message)"
             }
         } else {
             Write-Host "[FAIL] scheduled task registration failed (Register-ScheduledTask returned no task object)." -ForegroundColor Red
-            Write-Log "启用自动触发：失败(未返回任务对象)"
+            Write-Log "enable auto-trigger: failed (no task object returned)"
         }
     } catch {
         Write-Host "[FAIL] scheduled task registration error:$($_.Exception.Message)" -ForegroundColor Red
-        Write-Log "启用自动触发：异常 - $($_.Exception.Message)"
+        Write-Log "enable auto-trigger: exception - $($_.Exception.Message)"
     }
 }
 
@@ -687,10 +687,10 @@ function Uninstall-AutoTask {
     } catch {}
     if ($removed.Count -gt 0) {
         Write-Host "[OK] auto-trigger tasks uninstalled:$($removed -join ', ')" -ForegroundColor Green
-        Write-Log "停用自动触发：已卸载任务 $($removed -join ', ')"
+        Write-Log "disable auto-trigger: uninstalled task(s): $($removed -join ', ')"
     } else {
         Write-Host "[TIP] no registered auto-trigger tasks found (already uninstalled, nothing to do)." -ForegroundColor Gray
-        Write-Log "停用自动触发：未发现已注册任务。"
+        Write-Log "disable auto-trigger: no registered task found."
     }
 }
 
@@ -748,7 +748,7 @@ while ($true) {
     $wirelessN = @($connAdapters | Where-Object { Test-Wireless $_ }).Count
     $autoOn = $false
     try { $at = Get-ScheduledTask -TaskName 'NetworkConfigAutoSwitch' -ErrorAction SilentlyContinue; if ($at -and $at.State -ne 'Disabled') { $autoOn = $true } } catch {}
-    Write-Host "  connections: wired $wiredN · wireless $wirelessN  | auto-switch: $(if ($autoOn) { 'enabled' } else { 'disabled' })"
+    Write-Host "  connections: wired $wiredN | wireless $wirelessN  | auto-switch: $(if ($autoOn) { 'enabled' } else { 'disabled' })"
     Write-Host "rule: wired -> default static IP; wireless -> dynamic (DHCP)."
     Write-Host "  1. auto-switch (wired->default static, wireless->DHCP, refresh hosts)"
     Write-Host "  2. set static IP (manually change defaults)"
