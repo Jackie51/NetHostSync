@@ -10,7 +10,8 @@
 # 外部配置 config.json（改默认参数不用碰本脚本）。
 #
 # 用法：
-#   双击「网络配置.bat」进入交互菜单。
+#   双击「网络配置.bat」进入交互菜单（英文 ASCII，无残影）。
+#   图形界面（中文、无残影）：双击「网络配置-GUI.bat」或 powershell -File network_config.ps1 -Gui
 #   计划任务模式：powershell -File network_config.ps1 -Auto
 #   注册/卸载自动触发：-InstallAuto / -UninstallAuto
 #   只读诊断：-Diag
@@ -20,7 +21,8 @@ param(
     [switch]$Auto,         # 静默自动模式（供计划任务/网络变化触发，不显示菜单）
     [switch]$InstallAuto,  # 注册“网络变化自动触发”计划任务
     [switch]$UninstallAuto, # 卸载该计划任务
-    [switch]$Diag          # 只读诊断：显示各适配器真实状态（不改任何配置）
+    [switch]$Diag,         # 只读诊断：显示各适配器真实状态（不改任何配置）
+    [switch]$Gui           # 图形界面模式：WinForms 中文界面（无控制台全角字形残影）
 )
 
 $ScriptPath = $MyInvocation.MyCommand.Path
@@ -113,7 +115,9 @@ if (-not $isAdmin -and -not $isSystem) {
         exit 1
     }
     Write-Host "[TIP] not running as admin, requesting elevation..." -ForegroundColor Yellow
-    Start-Process PowerShell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    $elevArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+    if ($Gui) { $elevArgs += ' -Gui' }
+    Start-Process PowerShell.exe -Verb RunAs -ArgumentList $elevArgs
     exit
 }
 
@@ -729,6 +733,232 @@ function Pause-Return {
 }
 
 # ============================================================
+# 图形界面模式（-Gui）：用 WinForms 中文界面，规避控制台全角字形 ClearType 残影
+# 字体用 Microsoft YaHei（中文 Windows 自带），经 GDI 渲染，不会像控制台那样把全角字画进相邻单元格。
+# 所有动作复用下方已有的引擎函数；输出用 *>&1 重定向到日志框（捕获 Write-Host / 原生命令输出）。
+# ============================================================
+function Show-Gui {
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+
+    $script:busy = $false
+    $script:adapters = @()
+    $script:ipFields = @{}
+
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "NetHostSync 网络配置  v$ScriptVersion"
+    $form.Size = New-Object System.Drawing.Size(560, 700)
+    $form.StartPosition = 'CenterScreen'
+    $form.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
+    $form.BackColor = [System.Drawing.Color]::FromArgb(245,247,250)
+    $form.FormBorderStyle = 'FixedDialog'
+    $form.MaximizeBox = $false
+
+    $lblTitle = New-Object System.Windows.Forms.Label
+    $lblTitle.Text = 'NetHostSync  一键网络切换 + hosts 同步'
+    $lblTitle.Font = New-Object System.Drawing.Font('Microsoft YaHei', 12, [System.Drawing.FontStyle]::Bold)
+    $lblTitle.Location = New-Object System.Drawing.Point(20,12)
+    $lblTitle.Size = New-Object System.Drawing.Size(500,24)
+    $form.Controls.Add($lblTitle)
+
+    $adminOK = ($isAdmin -or $isSystem)
+    $lblPriv = New-Object System.Windows.Forms.Label
+    if ($adminOK) { $lblPriv.Text = '权限: 管理员 [OK]' ; $lblPriv.ForeColor = [System.Drawing.Color]::Green }
+    else { $lblPriv.Text = '权限: 非管理员 [!] 部分功能受限'; $lblPriv.ForeColor = [System.Drawing.Color]::Red }
+    $lblPriv.Location = New-Object System.Drawing.Point(20,40)
+    $lblPriv.Size = New-Object System.Drawing.Size(500,18)
+    $form.Controls.Add($lblPriv)
+
+    $grpAdp = New-Object System.Windows.Forms.GroupBox
+    $grpAdp.Text = '目标网卡'
+    $grpAdp.Location = New-Object System.Drawing.Point(20,66)
+    $grpAdp.Size = New-Object System.Drawing.Size(500,52)
+    $form.Controls.Add($grpAdp)
+
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.DropDownStyle = 'DropDownList'
+    $combo.Location = New-Object System.Drawing.Point(12,20)
+    $combo.Size = New-Object System.Drawing.Size(380,23)
+    $grpAdp.Controls.Add($combo)
+
+    $btnRefresh = New-Object System.Windows.Forms.Button
+    $btnRefresh.Text = '刷新'
+    $btnRefresh.Location = New-Object System.Drawing.Point(400,19)
+    $btnRefresh.Size = New-Object System.Drawing.Size(80,24)
+    $grpAdp.Controls.Add($btnRefresh)
+
+    $btnSpecs = @(
+        @{ t='① 一键自动切换'; c={ Run-Action -sb { Invoke-AutoConfig } } },
+        @{ t='② 有线→静态IP'; c={ Run-Static } },
+        @{ t='③ 无线→DHCP'; c={ Run-Dhcp } },
+        @{ t='④ 启用自动触发'; c={ Run-Action -sb { Install-AutoTask } } },
+        @{ t='⑤ 停用自动触发'; c={ Run-Action -sb { Uninstall-AutoTask } } },
+        @{ t='⑥ 恢复上次配置'; c={ Run-Restore } },
+        @{ t='⑦ 只读诊断'; c={ Run-Action -sb { Show-Diagnostics } } },
+        @{ t='⑧ 退出'; c={ $form.Close() } }
+    )
+    $script:actionButtons = @()
+    for ($i = 0; $i -lt $btnSpecs.Count; $i++) {
+        $r = [math]::Floor($i / 2); $col = $i % 2
+        $b = New-Object System.Windows.Forms.Button
+        $b.Text = $btnSpecs[$i].t
+        $b.Location = New-Object System.Drawing.Point(20 + $col * 260, 126 + $r * 44)
+        $b.Size = New-Object System.Drawing.Size(240, 36)
+        $b.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
+        $b.Add_Click($btnSpecs[$i].c)
+        $form.Controls.Add($b)
+        $script:actionButtons += $b
+    }
+
+    $grpIp = New-Object System.Windows.Forms.GroupBox
+    $grpIp.Text = '静态IP（可选，留空用默认；仅②用到）'
+    $grpIp.Location = New-Object System.Drawing.Point(20,312)
+    $grpIp.Size = New-Object System.Drawing.Size(500,96)
+    $form.Controls.Add($grpIp)
+
+    $fields = @(
+        @{ l='IP';   v=$DefaultIP;      ref='txtIp' },
+        @{ l='掩码'; v=$DefaultMask;    ref='txtMask' },
+        @{ l='网关'; v=$DefaultGateway; ref='txtGw' },
+        @{ l='DNS1'; v=$DefaultDNS1;    ref='txtDns1' },
+        @{ l='DNS2'; v=$DefaultDNS2;    ref='txtDns2' }
+    )
+    for ($i = 0; $i -lt $fields.Count; $i++) {
+        $col = $i % 3; $row = [math]::Floor($i / 3)
+        $x = 12 + $col * 158; $y = 20 + $row * 34
+        $lab = New-Object System.Windows.Forms.Label
+        $lab.Text = $fields[$i].l
+        $lab.Location = New-Object System.Drawing.Point($x, $y)
+        $lab.Size = New-Object System.Drawing.Size(140, 16)
+        $grpIp.Controls.Add($lab)
+        $tb = New-Object System.Windows.Forms.TextBox
+        $tb.Text = $fields[$i].v
+        $tb.Location = New-Object System.Drawing.Point($x, $y + 16)
+        $tb.Size = New-Object System.Drawing.Size(140, 20)
+        $grpIp.Controls.Add($tb)
+        $script:ipFields[$fields[$i].ref] = $tb
+    }
+
+    $lblLog = New-Object System.Windows.Forms.Label
+    $lblLog.Text = '运行日志'
+    $lblLog.Location = New-Object System.Drawing.Point(20,418)
+    $lblLog.Size = New-Object System.Drawing.Size(400,18)
+    $form.Controls.Add($lblLog)
+
+    $rtb = New-Object System.Windows.Forms.RichTextBox
+    $rtb.Location = New-Object System.Drawing.Point(20,438)
+    $rtb.Size = New-Object System.Drawing.Size(500,196)
+    $rtb.ReadOnly = $true
+    $rtb.Font = New-Object System.Drawing.Font('Consolas', 9)
+    $rtb.BackColor = [System.Drawing.Color]::FromArgb(30,30,30)
+    $rtb.ForeColor = [System.Drawing.Color]::LightGray
+    $form.Controls.Add($rtb)
+
+    $btnClear = New-Object System.Windows.Forms.Button
+    $btnClear.Text = '清空日志'
+    $btnClear.Location = New-Object System.Drawing.Point(420,416)
+    $btnClear.Size = New-Object System.Drawing.Size(100,22)
+    $form.Controls.Add($btnClear)
+
+    function Add-Log($line) {
+        $c = 'LightGray'
+        if ($line -match '\[ERROR\]|\[FAIL\]|unreachable|异常') { $c = 'Red' }
+        elseif ($line -match '\[OK\]|complete|enabled|成功|refreshed') { $c = 'LimeGreen' }
+        elseif ($line -match '\[TIP\]|\[WARN\]|conflict|cancel|取消|跳过') { $c = 'Gold' }
+        elseif ($line -match 'applying|setting|detected|restore|refresh') { $c = 'SkyBlue' }
+        $rtb.SelectionStart = $rtb.Text.Length
+        $rtb.SelectionColor = [System.Drawing.Color]::FromName($c)
+        $rtb.AppendText($line + [Environment]::NewLine)
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+
+    function Set-ButtonsEnabled($on) { foreach ($b in $script:actionButtons) { $b.Enabled = $on } }
+
+    function Get-SelAlias {
+        if ($combo.SelectedIndex -lt 0 -or $script:adapters.Count -eq 0) { return $null }
+        return $script:adapters[$combo.SelectedIndex].InterfaceAlias
+    }
+
+    function Fill-Adapters {
+        $combo.Items.Clear()
+        $list = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
+        $script:adapters = $list
+        if ($list.Count -eq 0) { $combo.Items.Add('(未检测到已连接网卡)') | Out-Null; $combo.SelectedIndex = 0 }
+        else {
+            foreach ($a in $list) {
+                $ip = (Get-NetIPAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
+                $tag = if (Test-Wireless $a) { '无线' } else { '有线' }
+                $combo.Items.Add("[$tag] $($a.InterfaceAlias)  ($ip)") | Out-Null
+            }
+            $combo.SelectedIndex = 0
+        }
+    }
+
+    function Run-Action {
+        param([scriptblock]$sb, [object[]]$argsList = @())
+        if ($script:busy) { return }
+        $script:busy = $true; Set-ButtonsEnabled $false
+        try {
+            $output = & $sb @argsList *>&1
+            foreach ($l in $output) { Add-Log $l.ToString() }
+        } catch { Add-Log ("[ERROR] " + $_.Exception.Message) }
+        $script:busy = $false; Set-ButtonsEnabled $true
+    }
+
+    function Run-Static {
+        $alias = Get-SelAlias
+        if (-not $alias) { Add-Log '[ERROR] 请先在上方选择一个目标网卡。'; return }
+        $ip = if ($script:ipFields['txtIp'].Text.Trim()) { $script:ipFields['txtIp'].Text.Trim() } else { $DefaultIP }
+        $mask = if ($script:ipFields['txtMask'].Text.Trim()) { $script:ipFields['txtMask'].Text.Trim() } else { $DefaultMask }
+        $gw = if ($script:ipFields['txtGw'].Text.Trim()) { $script:ipFields['txtGw'].Text.Trim() } else { $DefaultGateway }
+        $dns1 = if ($script:ipFields['txtDns1'].Text.Trim()) { $script:ipFields['txtDns1'].Text.Trim() } else { $DefaultDNS1 }
+        $dns2 = $script:ipFields['txtDns2'].Text.Trim()
+        Run-Action -sb { param($a,$i,$m,$g,$d1,$d2)
+            $adp = Get-NetAdapter -InterfaceAlias $a -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($adp) { Backup-Adapter $adp | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8 }
+            Apply-Static $a $i $m $g $d1 $d2 $false
+            Test-Connectivity $a
+        } -argsList @($alias,$ip,$mask,$gw,$dns1,$dns2)
+    }
+
+    function Run-Dhcp {
+        $alias = Get-SelAlias
+        if (-not $alias) { Add-Log '[ERROR] 请先在上方选择一个目标网卡。'; return }
+        Run-Action -sb { param($a)
+            $adp = Get-NetAdapter -InterfaceAlias $a -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($adp) { Backup-Adapter $adp | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8 }
+            Set-Dhcp $a
+            Test-Connectivity $a
+        } -argsList @($alias)
+    }
+
+    function Run-Restore {
+        if ($script:busy) { return }
+        $script:busy = $true; Set-ButtonsEnabled $false
+        try {
+            if (-not (Test-Path $BackupFile)) { Add-Log '[TIP] 尚未生成备份文件（还未切换过）。' }
+            else {
+                $bk = Get-Content $BackupFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                $list = if ($bk -is [Array]) { $bk } else { @($bk) }
+                foreach ($e in $list) {
+                    if ($e.Dhcp) { Set-Dhcp $e.Alias }
+                    else { $m = ConvertTo-DottedMask $e.Mask; Apply-Static $e.Alias $e.IP $m $e.Gateway $e.DNS1 $e.DNS2 $e.Wireless }
+                    Add-Log ("[OK] 已恢复: " + $e.Alias)
+                }
+            }
+        } catch { Add-Log ("[ERROR] " + $_.Exception.Message) }
+        $script:busy = $false; Set-ButtonsEnabled $true
+    }
+
+    $btnRefresh.Add_Click({ Fill-Adapters })
+    $btnClear.Add_Click({ $rtb.Clear() })
+
+    Fill-Adapters
+    Add-Log 'NetHostSync GUI 已就绪。选择网卡后点击上方按钮执行操作。'
+    $form.ShowDialog() | Out-Null
+}
+
+# ============================================================
 # 调度分发（非交互开关）
 # ============================================================
 if ($UninstallAuto) { Uninstall-AutoTask; exit }
@@ -744,6 +974,9 @@ if ($Auto)          {
     Write-Log "自动模式结束。"
     exit
 }
+
+# 图形界面入口（中文、经 GDI 渲染无残影）：-Gui 时直接拉起 WinForms，不再进入控制台菜单
+if ($Gui) { Show-Gui; exit }
 
 # ============================================================
 # 交互主循环
