@@ -748,7 +748,7 @@ function Show-Gui {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "NetHostSync 网络配置  v$ScriptVersion"
-    $form.Size = New-Object System.Drawing.Size(560, 790)
+    $form.Size = New-Object System.Drawing.Size(560, 810)
     $form.StartPosition = 'CenterScreen'
     $form.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
     $form.BackColor = [System.Drawing.Color]::FromArgb(245,247,250)
@@ -760,6 +760,7 @@ function Show-Gui {
     $lblTitle.Font = New-Object System.Drawing.Font('Microsoft YaHei', 12, [System.Drawing.FontStyle]::Bold)
     $lblTitle.Location = New-Object System.Drawing.Point(20,12)
     $lblTitle.Size = New-Object System.Drawing.Size(500,24)
+    $lblTitle.AutoSize = $false
     $form.Controls.Add($lblTitle)
 
     $adminOK = ($isAdmin -or $isSystem)
@@ -768,24 +769,26 @@ function Show-Gui {
     else { $lblPriv.Text = '权限: 非管理员 [!] 部分功能受限'; $lblPriv.ForeColor = [System.Drawing.Color]::Red }
     $lblPriv.Location = New-Object System.Drawing.Point(20,40)
     $lblPriv.Size = New-Object System.Drawing.Size(500,18)
+    $lblPriv.AutoSize = $false
     $form.Controls.Add($lblPriv)
 
-    # ---- 状态总览面板（体现“整体”）----
+    # ---- 状态总览面板（体现"整体"）----
     $grpStatus = New-Object System.Windows.Forms.GroupBox
     $grpStatus.Text = '当前状态'
     $grpStatus.Location = New-Object System.Drawing.Point(20,64)
-    $grpStatus.Size = New-Object System.Drawing.Size(500,96)
+    $grpStatus.Size = New-Object System.Drawing.Size(500,108)
     $form.Controls.Add($grpStatus)
 
     $lblStatus = New-Object System.Windows.Forms.Label
     $lblStatus.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
     $lblStatus.Location = New-Object System.Drawing.Point(12,18)
-    $lblStatus.Size = New-Object System.Drawing.Size(420,72)
+    $lblStatus.Size = New-Object System.Drawing.Size(400,84)
+    $lblStatus.AutoSize = $false
     $grpStatus.Controls.Add($lblStatus)
 
     $btnStatus = New-Object System.Windows.Forms.Button
     $btnStatus.Text = '刷新状态'
-    $btnStatus.Location = New-Object System.Drawing.Point(420,18)
+    $btnStatus.Location = New-Object System.Drawing.Point(420,22)
     $btnStatus.Size = New-Object System.Drawing.Size(70,24)
     $grpStatus.Controls.Add($btnStatus)
 
@@ -793,7 +796,7 @@ function Show-Gui {
     $btnAuto = New-Object System.Windows.Forms.Button
     $btnAuto.Text = '① 一键自动切换（刷网络配置 + hosts 同步）'
     $btnAuto.Font = New-Object System.Drawing.Font('Microsoft YaHei', 11, [System.Drawing.FontStyle]::Bold)
-    $btnAuto.Location = New-Object System.Drawing.Point(20,170)
+    $btnAuto.Location = New-Object System.Drawing.Point(20,182)
     $btnAuto.Size = New-Object System.Drawing.Size(500,46)
     $btnAuto.BackColor = [System.Drawing.Color]::FromArgb(0,120,215)
     $btnAuto.ForeColor = [System.Drawing.Color]::White
@@ -815,7 +818,7 @@ function Show-Gui {
         $b = New-Object System.Windows.Forms.Button
         $b.Text = $btnSpecs[$i].t
         $b.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
-        $b.Location = New-Object System.Drawing.Point(20 + $col * 260, 226 + $r * 42)
+        $b.Location = New-Object System.Drawing.Point(20 + $col * 260, 238 + $r * 40)
         $b.Size = New-Object System.Drawing.Size(240, 34)
         $b.Add_Click($btnSpecs[$i].c)
         $form.Controls.Add($b)
@@ -825,73 +828,77 @@ function Show-Gui {
     # ---- 静态IP 输入区 ----
     $grpIp = New-Object System.Windows.Forms.GroupBox
     $grpIp.Text = '静态IP（可选，留空用默认；仅②用到）'
-    $grpIp.Location = New-Object System.Drawing.Point(20,400)
-    $grpIp.Size = New-Object System.Drawing.Size(500,96)
+    $grpIp.Location = New-Object System.Drawing.Point(20,404)
+    $grpIp.Size = New-Object System.Drawing.Size(500,126)
     $form.Controls.Add($grpIp)
 
     $fields = @(
-        @{ l='IP';   v=$DefaultIP;      ref='txtIp' },
-        @{ l='掩码'; v=$DefaultMask;    ref='txtMask' },
-        @{ l='网关'; v=$DefaultGateway; ref='txtGw' },
-        @{ l='DNS1'; v=$DefaultDNS1;    ref='txtDns1' },
-        @{ l='DNS2'; v=$DefaultDNS2;    ref='txtDns2' }
+        @{ l='IP';   v=$DefaultIP;      ref='txtIp';   row=0; col=0 },
+        @{ l='掩码'; v=$DefaultMask;    ref='txtMask'; row=0; col=1 },
+        @{ l='网关'; v=$DefaultGateway; ref='txtGw';   row=0; col=2 },
+        @{ l='DNS1'; v=$DefaultDNS1;    ref='txtDns1'; row=1; col=0 },
+        @{ l='DNS2'; v=$DefaultDNS2;    ref='txtDns2'; row=1; col=1 }
     )
-    for ($i = 0; $i -lt $fields.Count; $i++) {
-        $col = $i % 3; $row = [math]::Floor($i / 3)
-        $x = 12 + $col * 158; $y = 20 + $row * 34
+    foreach ($f in $fields) {
+        $x = 14 + $f.col * 160
+        $yLabel = 22 + $f.row * 48
+        $yBox   = 40 + $f.row * 48
         $lab = New-Object System.Windows.Forms.Label
-        $lab.Text = $fields[$i].l
-        $lab.Location = New-Object System.Drawing.Point($x, $y)
-        $lab.Size = New-Object System.Drawing.Size(140, 16)
+        $lab.Text = $f.l
+        $lab.Location = New-Object System.Drawing.Point($x, $yLabel)
+        $lab.Size = New-Object System.Drawing.Size(140, 18)
+        $lab.AutoSize = $false
         $grpIp.Controls.Add($lab)
         $tb = New-Object System.Windows.Forms.TextBox
-        $tb.Text = $fields[$i].v
-        $tb.Location = New-Object System.Drawing.Point($x, $y + 16)
-        $tb.Size = New-Object System.Drawing.Size(140, 20)
+        $tb.Text = $f.v
+        $tb.Location = New-Object System.Drawing.Point($x, $yBox)
+        $tb.Size = New-Object System.Drawing.Size(140, 22)
         $grpIp.Controls.Add($tb)
-        $script:ipFields[$fields[$i].ref] = $tb
+        $script:ipFields[$f.ref] = $tb
     }
 
     # ---- 目标网卡选择（②⑥⑦ 用到）----
     $lblAdp = New-Object System.Windows.Forms.Label
     $lblAdp.Text = '目标网卡:'
-    $lblAdp.Location = New-Object System.Drawing.Point(20,510)
+    $lblAdp.Location = New-Object System.Drawing.Point(20,542)
     $lblAdp.Size = New-Object System.Drawing.Size(70,18)
+    $lblAdp.AutoSize = $false
     $form.Controls.Add($lblAdp)
 
     $combo = New-Object System.Windows.Forms.ComboBox
     $combo.DropDownStyle = 'DropDownList'
-    $combo.Location = New-Object System.Drawing.Point(95,508)
+    $combo.Location = New-Object System.Drawing.Point(95,540)
     $combo.Size = New-Object System.Drawing.Size(330,23)
     $form.Controls.Add($combo)
 
     $btnRefreshAdp = New-Object System.Windows.Forms.Button
     $btnRefreshAdp.Text = '刷新网卡'
-    $btnRefreshAdp.Location = New-Object System.Drawing.Point(435,507)
+    $btnRefreshAdp.Location = New-Object System.Drawing.Point(435,539)
     $btnRefreshAdp.Size = New-Object System.Drawing.Size(80,24)
     $form.Controls.Add($btnRefreshAdp)
 
     # ---- 日志区 ----
     $lblLog = New-Object System.Windows.Forms.Label
     $lblLog.Text = '运行日志'
-    $lblLog.Location = New-Object System.Drawing.Point(20,540)
+    $lblLog.Location = New-Object System.Drawing.Point(20,572)
     $lblLog.Size = New-Object System.Drawing.Size(400,18)
+    $lblLog.AutoSize = $false
     $form.Controls.Add($lblLog)
 
+    $btnClear = New-Object System.Windows.Forms.Button
+    $btnClear.Text = '清空日志'
+    $btnClear.Location = New-Object System.Drawing.Point(420,570)
+    $btnClear.Size = New-Object System.Drawing.Size(100,22)
+    $form.Controls.Add($btnClear)
+
     $rtb = New-Object System.Windows.Forms.RichTextBox
-    $rtb.Location = New-Object System.Drawing.Point(20,560)
-    $rtb.Size = New-Object System.Drawing.Size(500,200)
+    $rtb.Location = New-Object System.Drawing.Point(20,594)
+    $rtb.Size = New-Object System.Drawing.Size(500,170)
     $rtb.ReadOnly = $true
     $rtb.Font = New-Object System.Drawing.Font('Consolas', 9)
     $rtb.BackColor = [System.Drawing.Color]::FromArgb(30,30,30)
     $rtb.ForeColor = [System.Drawing.Color]::LightGray
     $form.Controls.Add($rtb)
-
-    $btnClear = New-Object System.Windows.Forms.Button
-    $btnClear.Text = '清空日志'
-    $btnClear.Location = New-Object System.Drawing.Point(420,538)
-    $btnClear.Size = New-Object System.Drawing.Size(100,22)
-    $form.Controls.Add($btnClear)
 
     function Add-Log($line) {
         $c = 'LightGray'
