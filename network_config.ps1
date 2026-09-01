@@ -733,8 +733,9 @@ function Pause-Return {
 }
 
 # ============================================================
-# 图形界面模式（-Gui）：用 WinForms 中文界面，规避控制台全角字形 ClearType 残影
-# 字体用 Microsoft YaHei（中文 Windows 自带），经 GDI 渲染，不会像控制台那样把全角字画进相邻单元格。
+# 图形界面模式（-Gui）：仪表盘式中文界面，顶部状态总览 + 核心“一键自动切换”大按钮 + 次级操作按钮。
+# 字体用 Microsoft YaHei（中文 Windows 自带）。注：若仍见全角字右侧淡影，属系统 ClearType 抗锯齿
+# （影响控制台/WT/WinForms 所有文本渲染），需在“显示设置”关闭“平滑屏幕字体边缘”或改用非 ClearType 字体。
 # 所有动作复用下方已有的引擎函数；输出用 *>&1 重定向到日志框（捕获 Write-Host / 原生命令输出）。
 # ============================================================
 function Show-Gui {
@@ -747,7 +748,7 @@ function Show-Gui {
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "NetHostSync 网络配置  v$ScriptVersion"
-    $form.Size = New-Object System.Drawing.Size(560, 700)
+    $form.Size = New-Object System.Drawing.Size(560, 790)
     $form.StartPosition = 'CenterScreen'
     $form.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
     $form.BackColor = [System.Drawing.Color]::FromArgb(245,247,250)
@@ -769,50 +770,62 @@ function Show-Gui {
     $lblPriv.Size = New-Object System.Drawing.Size(500,18)
     $form.Controls.Add($lblPriv)
 
-    $grpAdp = New-Object System.Windows.Forms.GroupBox
-    $grpAdp.Text = '目标网卡'
-    $grpAdp.Location = New-Object System.Drawing.Point(20,66)
-    $grpAdp.Size = New-Object System.Drawing.Size(500,52)
-    $form.Controls.Add($grpAdp)
+    # ---- 状态总览面板（体现“整体”）----
+    $grpStatus = New-Object System.Windows.Forms.GroupBox
+    $grpStatus.Text = '当前状态'
+    $grpStatus.Location = New-Object System.Drawing.Point(20,64)
+    $grpStatus.Size = New-Object System.Drawing.Size(500,96)
+    $form.Controls.Add($grpStatus)
 
-    $combo = New-Object System.Windows.Forms.ComboBox
-    $combo.DropDownStyle = 'DropDownList'
-    $combo.Location = New-Object System.Drawing.Point(12,20)
-    $combo.Size = New-Object System.Drawing.Size(380,23)
-    $grpAdp.Controls.Add($combo)
+    $lblStatus = New-Object System.Windows.Forms.Label
+    $lblStatus.Font = New-Object System.Drawing.Font('Microsoft YaHei', 9)
+    $lblStatus.Location = New-Object System.Drawing.Point(12,18)
+    $lblStatus.Size = New-Object System.Drawing.Size(420,72)
+    $grpStatus.Controls.Add($lblStatus)
 
-    $btnRefresh = New-Object System.Windows.Forms.Button
-    $btnRefresh.Text = '刷新'
-    $btnRefresh.Location = New-Object System.Drawing.Point(400,19)
-    $btnRefresh.Size = New-Object System.Drawing.Size(80,24)
-    $grpAdp.Controls.Add($btnRefresh)
+    $btnStatus = New-Object System.Windows.Forms.Button
+    $btnStatus.Text = '刷新状态'
+    $btnStatus.Location = New-Object System.Drawing.Point(420,18)
+    $btnStatus.Size = New-Object System.Drawing.Size(70,24)
+    $grpStatus.Controls.Add($btnStatus)
 
+    # ---- 核心集成动作：一键自动切换（刷网络配置 + hosts 同步）----
+    $btnAuto = New-Object System.Windows.Forms.Button
+    $btnAuto.Text = '① 一键自动切换（刷网络配置 + hosts 同步）'
+    $btnAuto.Font = New-Object System.Drawing.Font('Microsoft YaHei', 11, [System.Drawing.FontStyle]::Bold)
+    $btnAuto.Location = New-Object System.Drawing.Point(20,170)
+    $btnAuto.Size = New-Object System.Drawing.Size(500,46)
+    $btnAuto.BackColor = [System.Drawing.Color]::FromArgb(0,120,215)
+    $btnAuto.ForeColor = [System.Drawing.Color]::White
+    $form.Controls.Add($btnAuto)
+
+    # ---- 次级操作按钮 ----
     $btnSpecs = @(
-        @{ t='① 一键自动切换'; c={ Run-Action -sb { Invoke-AutoConfig } } },
-        @{ t='② 有线→静态IP'; c={ Run-Static } },
-        @{ t='③ 无线→DHCP'; c={ Run-Dhcp } },
+        @{ t='② 有线->静态IP'; c={ Run-Static } },
+        @{ t='③ 无线->DHCP';   c={ Run-Dhcp } },
         @{ t='④ 启用自动触发'; c={ Run-Action -sb { Install-AutoTask } } },
         @{ t='⑤ 停用自动触发'; c={ Run-Action -sb { Uninstall-AutoTask } } },
         @{ t='⑥ 恢复上次配置'; c={ Run-Restore } },
-        @{ t='⑦ 只读诊断'; c={ Run-Action -sb { Show-Diagnostics } } },
-        @{ t='⑧ 退出'; c={ $form.Close() } }
+        @{ t='⑦ 只读诊断';     c={ Run-Action -sb { Show-Diagnostics } } },
+        @{ t='⑧ 退出';         c={ $form.Close() } }
     )
     $script:actionButtons = @()
     for ($i = 0; $i -lt $btnSpecs.Count; $i++) {
         $r = [math]::Floor($i / 2); $col = $i % 2
         $b = New-Object System.Windows.Forms.Button
         $b.Text = $btnSpecs[$i].t
-        $b.Location = New-Object System.Drawing.Point(20 + $col * 260, 126 + $r * 44)
-        $b.Size = New-Object System.Drawing.Size(240, 36)
         $b.Font = New-Object System.Drawing.Font('Microsoft YaHei', 10)
+        $b.Location = New-Object System.Drawing.Point(20 + $col * 260, 226 + $r * 42)
+        $b.Size = New-Object System.Drawing.Size(240, 34)
         $b.Add_Click($btnSpecs[$i].c)
         $form.Controls.Add($b)
         $script:actionButtons += $b
     }
 
+    # ---- 静态IP 输入区 ----
     $grpIp = New-Object System.Windows.Forms.GroupBox
     $grpIp.Text = '静态IP（可选，留空用默认；仅②用到）'
-    $grpIp.Location = New-Object System.Drawing.Point(20,312)
+    $grpIp.Location = New-Object System.Drawing.Point(20,400)
     $grpIp.Size = New-Object System.Drawing.Size(500,96)
     $form.Controls.Add($grpIp)
 
@@ -839,15 +852,35 @@ function Show-Gui {
         $script:ipFields[$fields[$i].ref] = $tb
     }
 
+    # ---- 目标网卡选择（②⑥⑦ 用到）----
+    $lblAdp = New-Object System.Windows.Forms.Label
+    $lblAdp.Text = '目标网卡:'
+    $lblAdp.Location = New-Object System.Drawing.Point(20,510)
+    $lblAdp.Size = New-Object System.Drawing.Size(70,18)
+    $form.Controls.Add($lblAdp)
+
+    $combo = New-Object System.Windows.Forms.ComboBox
+    $combo.DropDownStyle = 'DropDownList'
+    $combo.Location = New-Object System.Drawing.Point(95,508)
+    $combo.Size = New-Object System.Drawing.Size(330,23)
+    $form.Controls.Add($combo)
+
+    $btnRefreshAdp = New-Object System.Windows.Forms.Button
+    $btnRefreshAdp.Text = '刷新网卡'
+    $btnRefreshAdp.Location = New-Object System.Drawing.Point(435,507)
+    $btnRefreshAdp.Size = New-Object System.Drawing.Size(80,24)
+    $form.Controls.Add($btnRefreshAdp)
+
+    # ---- 日志区 ----
     $lblLog = New-Object System.Windows.Forms.Label
     $lblLog.Text = '运行日志'
-    $lblLog.Location = New-Object System.Drawing.Point(20,418)
+    $lblLog.Location = New-Object System.Drawing.Point(20,540)
     $lblLog.Size = New-Object System.Drawing.Size(400,18)
     $form.Controls.Add($lblLog)
 
     $rtb = New-Object System.Windows.Forms.RichTextBox
-    $rtb.Location = New-Object System.Drawing.Point(20,438)
-    $rtb.Size = New-Object System.Drawing.Size(500,196)
+    $rtb.Location = New-Object System.Drawing.Point(20,560)
+    $rtb.Size = New-Object System.Drawing.Size(500,200)
     $rtb.ReadOnly = $true
     $rtb.Font = New-Object System.Drawing.Font('Consolas', 9)
     $rtb.BackColor = [System.Drawing.Color]::FromArgb(30,30,30)
@@ -856,7 +889,7 @@ function Show-Gui {
 
     $btnClear = New-Object System.Windows.Forms.Button
     $btnClear.Text = '清空日志'
-    $btnClear.Location = New-Object System.Drawing.Point(420,416)
+    $btnClear.Location = New-Object System.Drawing.Point(420,538)
     $btnClear.Size = New-Object System.Drawing.Size(100,22)
     $form.Controls.Add($btnClear)
 
@@ -872,11 +905,33 @@ function Show-Gui {
         [System.Windows.Forms.Application]::DoEvents()
     }
 
-    function Set-ButtonsEnabled($on) { foreach ($b in $script:actionButtons) { $b.Enabled = $on } }
+    function Set-ButtonsEnabled($on) {
+        foreach ($b in $script:actionButtons) { $b.Enabled = $on }
+        $btnAuto.Enabled = $on
+    }
 
     function Get-SelAlias {
         if ($combo.SelectedIndex -lt 0 -or $script:adapters.Count -eq 0) { return $null }
         return $script:adapters[$combo.SelectedIndex].InterfaceAlias
+    }
+
+    function Refresh-Status {
+        try {
+            $conn = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
+            $a = $conn | Select-Object -First 1
+            $type = if ($a -and (Test-Wireless $a)) { '无线' } else { '有线' }
+            $ip = if ($a) { (Get-NetIPAddress -InterfaceIndex $a.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress } else { '(无)' }
+            $autoOn = $false
+            try { $at = Get-ScheduledTask -TaskName 'NetworkConfigAutoSwitch' -ErrorAction SilentlyContinue; if ($at -and $at.State -ne 'Disabled') { $autoOn = $true } } catch {}
+            $hostsState = if ($autoOn) { '启用自动触发后随切换刷新' } else { '未启用自动触发（手动切换时也刷新）' }
+            $lblStatus.Text = "当前网卡: $(if ($a) { $a.InterfaceAlias } else { '(未检测到已连接网卡)' })`n" +
+                              "连接类型: $type`n" +
+                              "当前 IPv4: $ip`n" +
+                              "自动触发: $(if ($autoOn) { '已启用' } else { '未启用' })`n" +
+                              "hosts 同步: $hostsState"
+        } catch {
+            $lblStatus.Text = "[ERROR] 读取状态失败: $($_.Exception.Message)"
+        }
     }
 
     function Fill-Adapters {
@@ -903,6 +958,20 @@ function Show-Gui {
             foreach ($l in $output) { Add-Log $l.ToString() }
         } catch { Add-Log ("[ERROR] " + $_.Exception.Message) }
         $script:busy = $false; Set-ButtonsEnabled $true
+        Refresh-Status
+    }
+
+    function Run-Auto {
+        if ($script:busy) { return }
+        $script:busy = $true; Set-ButtonsEnabled $false
+        try {
+            Add-Log '>> 一键自动切换：刷网络配置 + hosts 同步 ...'
+            $output = Invoke-AutoConfig *>&1
+            foreach ($l in $output) { Add-Log $l.ToString() }
+            Add-Log '[OK] 自动切换完成（网络配置 + hosts 已刷新）。'
+        } catch { Add-Log ("[ERROR] " + $_.Exception.Message) }
+        $script:busy = $false; Set-ButtonsEnabled $true
+        Refresh-Status
     }
 
     function Run-Static {
@@ -948,15 +1017,20 @@ function Show-Gui {
             }
         } catch { Add-Log ("[ERROR] " + $_.Exception.Message) }
         $script:busy = $false; Set-ButtonsEnabled $true
+        Refresh-Status
     }
 
-    $btnRefresh.Add_Click({ Fill-Adapters })
+    $btnAuto.Add_Click({ Run-Auto })
+    $btnStatus.Add_Click({ Refresh-Status })
     $btnClear.Add_Click({ $rtb.Clear() })
+    $btnRefreshAdp.Add_Click({ Fill-Adapters })
 
+    Refresh-Status
     Fill-Adapters
-    Add-Log 'NetHostSync GUI 已就绪。选择网卡后点击上方按钮执行操作。'
+    Add-Log 'NetHostSync GUI 已就绪。点击「一键自动切换」执行核心集成动作，或选择网卡后做手动操作。'
     $form.ShowDialog() | Out-Null
 }
+
 
 # ============================================================
 # 调度分发（非交互开关）
