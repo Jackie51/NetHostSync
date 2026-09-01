@@ -750,9 +750,9 @@ if ($Auto)          {
 # ============================================================
 while ($true) {
     Clear-Screen
-    Write-Host "=============================================================" -ForegroundColor Cyan
+    Write-Host "==========================================================" -ForegroundColor Cyan
     Write-Host "    NetHostSync  v$ScriptVersion  -  auto NIC switch + hosts sync" -ForegroundColor Cyan
-    Write-Host "=============================================================" -ForegroundColor Cyan
+    Write-Host "==========================================================" -ForegroundColor Cyan
     $adminOK = ($isAdmin -or $isSystem)
     $adminText = if ($adminOK) { 'admin [OK]' } else { 'NOT admin [X](no permission to modify network config,right-click"run as administrator")' }
     $adminColor = if ($adminOK) { 'Green' } else { 'Red' }
