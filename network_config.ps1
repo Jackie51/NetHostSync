@@ -445,10 +445,7 @@ function Invoke-AutoConfig {
     $adapters = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_) })
     if ($adapters.Count -eq 0) {
         $msg = "no connected network adapter detected."
-        if ($Auto) {
-            Write-Log $msg
-            Write-Log "hosts sync will still be attempted below; if no usable IPv4 is found (e.g. all networks down), update_hosts.ps1 will skip writing and hosts keeps its last value."
-        } else { Write-Host "[ERROR] $msg" -ForegroundColor Red; Start-Sleep 2 }
+        if ($Auto) { Write-Log $msg } else { Write-Host "[ERROR] $msg" -ForegroundColor Red; Start-Sleep 2 }
         return
     }
     $changed = @()
@@ -587,9 +584,8 @@ function Install-AutoTask {
     #   ① 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
     #      两个 EventID 各自独立 EventTrigger（不用 or 复合，schtasks 对 XPath or 支持不可靠）。
     #   ② 登录(AtLogOn)/启动(AtStartup)触发器：覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
-    #   ③ 【定时兜底】每 2 分钟跑一次（TimeTrigger + Repetition，Duration 10 年≈永久循环）：
-    #       彻底消除“事件触发器漏抓（尤其有线断开 10001 不稳定）导致拔线后 hosts 长时间不更新”的死角；
-    #       2 分钟足够快，用户感知接近“即时”，又不会因过于频繁而干扰系统。
+    #   ③ 【定时兜底】每 5 分钟跑一次（TimeTrigger + Repetition，Duration 10 年≈永久循环）：
+    #       彻底消除“事件触发器漏抓（尤其有线断开 10001 不稳定）导致拔线后 hosts 永远不更新”的死角。
     #   改用 PowerShell Scheduled Task cmdlet（Register-ScheduledTask）构建任务对象，由系统生成合法 XML，
     #   绕开 schtasks.exe /Create /XML 对 Calendar/Daily 触发器及其 Repetition 解析不稳定的坑
     #   （曾反复报 “The task XML contains an unexpected node. ... DailyTrigger”）。
@@ -606,9 +602,9 @@ function Install-AutoTask {
         # 登录 / 启动 触发器
         $logonTrig = New-ScheduledTaskTrigger -AtLogOn
         $bootTrig  = New-ScheduledTaskTrigger -AtStartup
-        # 定时兜底：每 2 分钟一次，Duration 10 年（≈永久循环；-Once 起点在过去，Repetition 从当前持续向后）。
+        # 定时兜底：每 5 分钟一次，Duration 10 年（≈永久循环；-Once 起点在过去，Repetition 从当前持续向后）。
         $pollTrig  = New-ScheduledTaskTrigger -Once -At "2026-01-01T00:00:00" `
-                        -RepetitionInterval (New-TimeSpan -Minutes 2) -RepetitionDuration (New-TimeSpan -Days 3650)
+                        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
         $triggers  = @($evt10000, $evt10001, $logonTrig, $bootTrig, $pollTrig)
         # 任务设置：电池也跑、不限期停、可随时按需运行、网络可用与否都跑、多实例忽略新实例。
         $settings  = New-ScheduledTaskSettingsSet `
@@ -620,7 +616,7 @@ function Install-AutoTask {
             Write-Host "[OK] scheduled task registered'$taskName'." -ForegroundColor Green
             Write-Host "  network changes (cable plug/unplug, different Wi-Fi) will auto-switch config and refresh hosts (no manual run)." -ForegroundColor Gray
             Write-Host "  rule: wired->default static, wireless->DHCP; hosts synced to preferred IPv4." -ForegroundColor Gray
-            Write-Host "  triggers: network-change events (instant) + logon/startup + 2-min fallback (self-corrects within 2 min if an event is missed)." -ForegroundColor Gray
+            Write-Host "  triggers: network-change events (instant) + logon/startup + 5-min fallback (self-corrects within 5 min if an event is missed)." -ForegroundColor Gray
             Write-Host "  log written to:$(Split-Path -Leaf $LogFile)" -ForegroundColor Gray
             Write-Host "  to disable, choose 'Disable auto-trigger' in this menu or run -UninstallAuto." -ForegroundColor Gray
             Write-Host "  test trigger: run as admin 'schtasks /Run /TN $taskName', or 'network_config.ps1 -Auto';" -ForegroundColor Gray

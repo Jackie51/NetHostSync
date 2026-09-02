@@ -116,16 +116,13 @@ function Get-PreferredIPv4 {
     return $best.IP
 }
 
-# 多次重试探测 IPv4：刚切换网络（尤其手机热点 / 新 Wi-Fi / 拔线后无线重连）时 DHCP 可能尚未完成，
-# 首次探测往往拿不到地址；最多重试 10 次、每次间隔 3 秒（共约 30 秒），覆盖“网络已切换但 hosts 未更新”
-# 的时序竞态（事件触发瞬间无线可能还没拿到 IP）。拔线且无任何其他网络时，30 秒后仍无 IP 则跳过写入。
-# 先短暂等待 2 秒，让拔线/插线事件刚触发时的适配器状态竞态窗口先稳定，避免一开始就误判“无 IP”。
-Start-Sleep -Seconds 2
+# 多次重试探测 IPv4：刚切换网络（尤其手机热点 / 新 Wi-Fi）时 DHCP 可能尚未完成，
+# 首次探测可能拿不到地址；最多重试 6 次、每次间隔 3 秒，避免“网络已切换但 hosts 未更新”。
 $newIP = $null
-for ($attempt = 1; $attempt -le 10; $attempt++) {
+for ($attempt = 1; $attempt -le 6; $attempt++) {
     $newIP = Get-PreferredIPv4
     if ($newIP) { break }
-    if ($attempt -lt 10) {
+    if ($attempt -lt 6) {
         if (-not $Diag) { Write-Host "  attempt ${attempt}: no IPv4 detected, retrying in 3s..." -ForegroundColor Gray }
         Write-Log "attempt ${attempt}: no IPv4 detected, retrying in 3s..."
         Start-Sleep -Seconds 3
