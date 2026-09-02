@@ -778,7 +778,20 @@ function Show-Diagnostics {
         $gw = if ($ipCfg -and $ipCfg.IPv4DefaultGateway) { $ipCfg.IPv4DefaultGateway.NextHop } else { '(none)' }
         $dns = (Get-DnsClientServerAddress -InterfaceIndex $idx -AddressFamily IPv4 -ErrorAction SilentlyContinue).ServerAddresses
         $dnsStr = if ($dns) { $dns -join ' / ' } else { '(none)' }
-        $willDo = if ($isW) { 'DHCP dynamic' } else { "default static:$DefaultIP" }
+        $ov = Get-ManualOverride $alias
+        if ($ov) {
+            # 真实自动任务遇到有 override 的网卡一律跳过、完全不动；诊断须如实反映，否则会误导。
+            $willDo = "[skipped] manual override active (mode=$ov) - auto-switch leaves this adapter untouched"
+        } elseif ($isW) {
+            $willDo = 'DHCP dynamic'
+        } else {
+            # 有线：默认套 $DefaultIP；若当前已是别的用户静态 IP，一并显示实际值，避免"默认预测"与现状不符。
+            if ($addr -and $addr.PrefixOrigin -eq 'Manual' -and $addr.IPAddress -ne $DefaultIP) {
+                $willDo = "default static: $DefaultIP (current static: $($addr.IPAddress))"
+            } else {
+                $willDo = "default static: $DefaultIP"
+            }
+        }
         Write-Host "`n--- adapter: $alias ---" -ForegroundColor Yellow
         Write-Host "  type: $(if($isW){'wireless'}else{'wired'})  status: $($adapter.Status)  connection: $($adapter.MediaConnectionState)"
         Write-Host "  PrefixOrigin: $po  current IP: $(if($addr){$addr.IPAddress}else{'(none)'})/$(if($addr){$addr.PrefixLength}else{'?'})"
