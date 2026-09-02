@@ -752,7 +752,15 @@ function Pause-Return {
 # ============================================================
 # 交互主循环
 # ============================================================
-# 命令行自动注册/卸载路由（-InstallAuto / -ElevatedInstall / -UninstallAuto）
+# 命令行路由（静默自动 / 注册 / 卸载）——必须在进入交互菜单前拦截并 exit，否则会落到下面的
+# while($true) 菜单循环卡在 Read-Host 上。
+#
+# -Auto：计划任务（事件触发 10000/10001、登录/启动、轮询兜底）实际执行的入口，SYSTEM 非交互会话。
+#   此前缺失该路由，-Auto 会掉进交互菜单：SYSTEM 会话中 Read-Host 要么直接抛错终止脚本、
+#   要么一直阻塞直到任务执行时限（10 分钟）被系统杀掉 —— 两种情况都跑不到 Invoke-HostsUpdate，
+#   这正是“插上网线 hosts 不更新”的根本原因（任务即使注册成功也永远无法完成 hosts 同步）。
+if ($Auto) { Invoke-AutoConfig; exit }
+# -InstallAuto / -ElevatedInstall：注册自动触发计划任务。
 # 原逻辑只依赖菜单选项 4，导致 RunAs 提权后的窗口只是打开菜单、并未自动执行安装。
 # 此处显式路由，确保 -InstallAuto / -ElevatedInstall 落地为真正的注册动作。
 if ($InstallAuto -or $ElevatedInstall) { Install-AutoTask; exit }
