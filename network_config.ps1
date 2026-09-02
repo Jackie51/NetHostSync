@@ -29,6 +29,10 @@ $ScriptDir  = Split-Path -Parent $ScriptPath
 $ConfigFile = Join-Path $ScriptDir 'config.json'
 $BackupFile = Join-Path $ScriptDir 'backup.json'
 $LogFile    = Join-Path $ScriptDir 'network_switch.log'
+# 手动设置优先：记录用户“手动配置过”的网卡及其模式(dhcp/static)。
+# 自动切换(Invoke-AutoConfig)遇到这些网卡会跳过，不再覆盖用户的手动设置；
+# 直到用户再次执行菜单 1(auto-switch)显式交回自动管理，才清空该文件。
+$OverrideFile = Join-Path $ScriptDir 'manual_override.json'
 $ScriptVersion = '1.0'
 
 # ---------- 0. 控制台编码：修复 netsh 等原生命令的中文输出乱码 ----------
@@ -279,13 +283,68 @@ function Set-Dhcp($alias) {
     if (-not $idx) { Write-Host "[FAIL] adapter not found [$alias]." -ForegroundColor Red; return $false }
     Write-Host "`nsetting [$alias] restore to DHCP (dynamic)..."
     netsh interface ip set address name="$idx" dhcp
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[FAIL] failed to switch address to DHCP (netsh exit $LASTEXITCODE)." -ForegroundColor Red
+        return $false
+    }
     netsh interface ip set dns name="$idx" dhcp
     # 显式设定无线优先级 metric=$WirelessMetric（默认 20），确保与有线(metric=10)同时连接时
     # 系统路由确定性优先走有线（满足「有线/无线/热点同时连接时优先选用有线」）。
     try {
         Set-NetIPInterface -InterfaceAlias $alias -AddressFamily IPv4 -InterfaceMetric $WirelessMetric -ErrorAction Stop
-    } catch {}
+    }     catch {}
     Write-Host "DHCP configuration complete." -ForegroundColor Green
+    Write-Log "manual set: [$alias] switched to DHCP (dynamic)."
+    return $true
+}
+
+# ---------- 手动设置优先（manual override） ----------
+# 背景：自动切换对有线的规则是“当前 DHCP -> 强制套默认静态”，会把用户手动设的 DHCP 改回去，
+#       表现为“菜单 3 设了 DHCP 却没生效”。这里用 manual_override.json 记住用户手动配过的网卡，
+#       自动切换遇到它们一律跳过，直到用户再次执行菜单 1(auto-switch) 交回自动管理。
+function Get-ManualOverride($alias) {
+    if (-not $alias) { return $null }
+    if (-not (Test-Path $OverrideFile)) { return $null }
+    try {
+        $raw = Get-Content $OverrideFile -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (-not $raw) { return $null }
+        $prop = @($raw.PSObject.Properties | Where-Object { $_.Name -eq $alias } | Select-Object -First 1)
+        if ($prop.Count -gt 0) { return [string]$prop[0].Value }
+    } catch {}
+    return $null
+}
+
+function Set-ManualOverride($alias, $mode) {
+    if (-not $alias) { return }
+    $map = [ordered]@{}
+    if (Test-Path $OverrideFile) {
+        try {
+            $raw = Get-Content $OverrideFile -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($raw) { foreach ($p in $raw.PSObject.Properties) { $map[$p.Name] = [string]$p.Value } }
+        } catch {}
+    }
+    $map[$alias] = $mode
+    try {
+        $map | ConvertTo-Json | Set-Content $OverrideFile -Encoding UTF8
+        Write-Host "  [manual-override] [$alias] marked as '$mode' - auto-switch will skip it (run menu 1 to hand back control)." -ForegroundColor DarkCyan
+        Write-Log "manual override set: [$alias] = $mode (auto-switch will skip this adapter)."
+    } catch {
+        Write-Host "[WARN] failed to save manual override: $_" -ForegroundColor Yellow
+    }
+}
+
+function Clear-ManualOverrides {
+    if (Test-Path $OverrideFile) {
+        try {
+            Remove-Item $OverrideFile -Force -ErrorAction Stop
+            Write-Host "  [manual-override] cleared - all adapters handed back to automatic management." -ForegroundColor DarkCyan
+            Write-Log "manual override cleared: all adapters back to automatic management."
+            return $true
+        } catch {
+            Write-Host "[WARN] failed to clear manual override: $_" -ForegroundColor Yellow
+        }
+    }
+    return $false
 }
 
 # 抓取适配器当前配置（用于切换前备份）
@@ -316,11 +375,11 @@ function Restore-Backup {
         $alias = $e.Alias
         Write-Host "`nrestore adapter [$alias] 's previous config..."
         if ($e.Dhcp) {
-            Set-Dhcp $alias
+            if (Set-Dhcp $alias) { Set-ManualOverride $alias 'dhcp' }
         } else {
             if (-not $e.IP -or -not $e.DNS1) { Write-Host "  backup [$alias] has incomplete static info, skipping." -ForegroundColor Yellow; continue }
             $mask = ConvertTo-DottedMask $e.Mask
-            Apply-Static $alias $e.IP $mask $e.Gateway $e.DNS1 $e.DNS2 $e.Wireless
+            if (Apply-Static $alias $e.IP $mask $e.Gateway $e.DNS1 $e.DNS2 $e.Wireless) { Set-ManualOverride $alias 'static' }
         }
     }
     Show-Result $list[0].Alias
@@ -465,6 +524,14 @@ function Invoke-AutoConfig {
     foreach ($adapter in $adapters) {
         $alias = $adapter.InterfaceAlias
         $idx   = $adapter.InterfaceIndex
+        # 手动设置优先：用户手动配过（菜单2静态 / 菜单3 DHCP / 菜单6恢复）的网卡一律跳过，
+        # 不覆盖用户意图；直到用户执行菜单 1(auto-switch) 清空 override 才重新接管。
+        $ov = Get-ManualOverride $alias
+        if ($ov) {
+            if ($Auto) { Write-Log "-> ${alias}: manual override ($ov) active, skipping auto-switch." }
+            else { Write-Host "-> ${alias}: manual override ($ov) active, skipped" -ForegroundColor Gray }
+            continue
+        }
         $isW   = Test-Wireless $adapter
         $medium = if ($isW) { 'wireless' } else { 'wired' }
         $line = "detectedadapter:$alias($medium)"
@@ -796,6 +863,8 @@ while ($true) {
     try {
     switch ($choice) {
         '1' {
+            # 显式执行“自动切换”= 把控制权交回自动管理，故先清掉手动优先标记。
+            Clear-ManualOverrides
             $pa = Invoke-AutoConfig
             if (-not $Auto -and $pa) { Show-Result $pa }
         }
@@ -806,6 +875,7 @@ while ($true) {
             $bk = Backup-Adapter $adapter
             $bk | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
             if (Set-StaticWithPrompt $adapter.InterfaceAlias) {
+                Set-ManualOverride $adapter.InterfaceAlias 'static'
                 Test-Connectivity $adapter.InterfaceAlias
                 Show-Result $adapter.InterfaceAlias
             } else { Pause-Return }
@@ -816,7 +886,9 @@ while ($true) {
             if (-not $adapter) { Write-Host "[ERROR] no connected network adapter detected." -ForegroundColor Red; Start-Sleep 2; continue }
             $bk = Backup-Adapter $adapter
             $bk | ConvertTo-Json | Set-Content $BackupFile -Encoding UTF8
-            Set-Dhcp $adapter.InterfaceAlias
+            if (Set-Dhcp $adapter.InterfaceAlias) {
+                Set-ManualOverride $adapter.InterfaceAlias 'dhcp'
+            }
             Test-Connectivity $adapter.InterfaceAlias
             Show-Result $adapter.InterfaceAlias
         }

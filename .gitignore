@@ -7,6 +7,9 @@ hosts.*.bak
 # 网卡配置一键恢复备份（菜单 6 生成，非源码）
 backup.json
 
+# 手动设置优先标记（菜单 2/3/6 生成，机器相关运行时状态，非源码）
+manual_override.json
+
 # 运行时配置（首次运行自动生成；个人参数不进版本库）
 config.json
 
