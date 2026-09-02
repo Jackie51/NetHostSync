@@ -20,7 +20,8 @@ param(
     [switch]$Auto,         # 静默自动模式（供计划任务/网络变化触发，不显示菜单）
     [switch]$InstallAuto,  # 注册“网络变化自动触发”计划任务
     [switch]$UninstallAuto, # 卸载该计划任务
-    [switch]$Diag          # 只读诊断：显示各适配器真实状态（不改任何配置）
+    [switch]$Diag,         # 只读诊断：显示各适配器真实状态（不改任何配置）
+    [switch]$ElevatedInstall # 内部用：Install-AutoTask 自提权后带此标记运行，绕过非管理员提前退出
 )
 
 $ScriptPath = $MyInvocation.MyCommand.Path
@@ -118,6 +119,11 @@ if (-not $isAdmin -and -not $isSystem) {
         Write-Host '[ERROR] must run as Administrator (right-click and 'Run as Administrator').' -ForegroundColor Red
         exit 1
     }
+    if ($ElevatedInstall) {
+        # Install-AutoTask 自提权后已用管理员身份运行，但守卫在此前已弹出 UAC；
+        # 此处不应再拦，直接放行进入 Install-AutoTask（函数内 $isAdmin 此时为 $true）。
+        # 注意：正常 UAC 提权后 $isAdmin 应为 $true，理论上到不了这里；保留为防御性放行。
+    } else {
     Write-Host "[TIP] not running as admin, requesting elevation..." -ForegroundColor Yellow
     $elevArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
     Start-Process PowerShell.exe -Verb RunAs -ArgumentList $elevArgs
@@ -554,8 +560,13 @@ function Install-AutoTask {
     # 因此这里单独兜底——非管理员时自动以 RunAs 重启脚本并带 -InstallAuto 完成注册，
     # 避免“普通用户静默注册”导致 wevtutil/schtasks 失败、任务注册了却从不点火。
     if (-not ($isAdmin -or $isSystem)) {
+        if ($ElevatedInstall) {
+            # 已通过 -ElevatedInstall 提权仍是非管理员（极端情况），避免无限 RunAs 递归，直接报错退出。
+            Write-Host '[ERROR] admin elevation failed, cannot register scheduled task. Run as Administrator manually.' -ForegroundColor Red
+            return
+        }
         Write-Host '[TIP] registering scheduled task requires admin, requesting elevation...' -ForegroundColor Yellow
-        Start-Process PowerShell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -InstallAuto"
+        Start-Process PowerShell.exe -Verb RunAs -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`" -ElevatedInstall"
         Write-Host 'registration completed in new admin window, press any key to return to main menu.' -ForegroundColor Gray
         return
     }
@@ -740,6 +751,12 @@ function Pause-Return {
 # ============================================================
 # 交互主循环
 # ============================================================
+# 命令行自动注册/卸载路由（-InstallAuto / -ElevatedInstall / -UninstallAuto）
+# 原逻辑只依赖菜单选项 4，导致 RunAs 提权后的窗口只是打开菜单、并未自动执行安装。
+# 此处显式路由，确保 -InstallAuto / -ElevatedInstall 落地为真正的注册动作。
+if ($InstallAuto -or $ElevatedInstall) { Install-AutoTask; exit }
+if ($UninstallAuto) { Uninstall-AutoTask; exit }
+
 while ($true) {
     Clear-Screen
     Write-Host "==========================================================" -ForegroundColor Cyan

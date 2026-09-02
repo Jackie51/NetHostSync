@@ -1,0 +1,8 @@
+﻿=== 任务 NetworkConfigAutoSwitch 是否存在 ===
+NOT FOUND (task name NetworkConfigAutoSwitch does not exist)
+
+=== 全部含 network_config / update_hosts 动作的任务 ===
+no stray tasks found
+
+=== 最近 TaskScheduler 运行记录 (含 NetworkConfigAutoSwitch) ===
+no task scheduler events
