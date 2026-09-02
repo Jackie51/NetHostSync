@@ -63,6 +63,10 @@ $UpdateHostsScript = 'update_hosts.ps1'
 # 此处仅作文档/缺省，真正读取在 update_hosts.ps1 内完成。
 $HostsTargets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
 
+# 自动触发兜底轮询间隔（分钟）：默认 5。仅当某台机器需要从 config.json 覆盖时改小（如 2），
+# 全局默认值保持不变，避免为单台机器改坏其他正常机器。
+$AutoPollMinutes = 5
+
 # 读取外部配置文件（若存在则覆盖默认值）
 if (Test-Path $ConfigFile) {
     try {
@@ -78,6 +82,7 @@ if (Test-Path $ConfigFile) {
         if ($null -ne $cfg.UpdateHostsOnAuto) { $UpdateHostsOnAuto = [bool]$cfg.UpdateHostsOnAuto }
         if ($cfg.UpdateHostsScript) { $UpdateHostsScript = $cfg.UpdateHostsScript }
         if ($cfg.HostsTargets -and @($cfg.HostsTargets).Count -gt 0) { $HostsTargets = @($cfg.HostsTargets) }
+        if ($cfg.AutoPollMinutes) { $AutoPollMinutes = $cfg.AutoPollMinutes }
     } catch {
         Write-Host "[WARN] failed to read config file, using built-in defaults:$_" -ForegroundColor Yellow
     }
@@ -95,6 +100,7 @@ if (Test-Path $ConfigFile) {
         UpdateHostsOnAuto = $UpdateHostsOnAuto
         UpdateHostsScript = $UpdateHostsScript
         HostsTargets = $HostsTargets
+        AutoPollMinutes = $AutoPollMinutes
     }
     $defaultCfg | ConvertTo-Json | Set-Content $ConfigFile -Encoding UTF8
 }
@@ -584,8 +590,9 @@ function Install-AutoTask {
     #   ① 事件触发：NetworkProfile/Operational 的 10000(连接)/10001(断开)，覆盖插拔网线 / 切 Wi-Fi / 切热点；
     #      两个 EventID 各自独立 EventTrigger（不用 or 复合，schtasks 对 XPath or 支持不可靠）。
     #   ② 登录(AtLogOn)/启动(AtStartup)触发器：覆盖睡眠唤醒、重启后联网等事件偶发不点火的场景。
-    #   ③ 【定时兜底】每 5 分钟跑一次（TimeTrigger + Repetition，Duration 10 年≈永久循环）：
-    #       彻底消除“事件触发器漏抓（尤其有线断开 10001 不稳定）导致拔线后 hosts 永远不更新”的死角。
+    #   ③ 【定时兜底】每 $AutoPollMinutes 分钟跑一次（TimeTrigger + Repetition，Duration 10 年≈永久循环）：
+    #       消除“事件触发器漏抓导致拔线后 hosts 不更新”的死角；间隔由 config.json 的 AutoPollMinutes 控制（默认 5），
+    #       只有个别机器才需要改小，其他机器保持默认不变，不受影响。
     #   改用 PowerShell Scheduled Task cmdlet（Register-ScheduledTask）构建任务对象，由系统生成合法 XML，
     #   绕开 schtasks.exe /Create /XML 对 Calendar/Daily 触发器及其 Repetition 解析不稳定的坑
     #   （曾反复报 “The task XML contains an unexpected node. ... DailyTrigger”）。
@@ -602,9 +609,9 @@ function Install-AutoTask {
         # 登录 / 启动 触发器
         $logonTrig = New-ScheduledTaskTrigger -AtLogOn
         $bootTrig  = New-ScheduledTaskTrigger -AtStartup
-        # 定时兜底：每 5 分钟一次，Duration 10 年（≈永久循环；-Once 起点在过去，Repetition 从当前持续向后）。
+        # 定时兜底：每 $AutoPollMinutes 分钟一次（来自 config.json 的 AutoPollMinutes，默认 5），Duration 10 年（≈永久循环）。
         $pollTrig  = New-ScheduledTaskTrigger -Once -At "2026-01-01T00:00:00" `
-                        -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)
+                        -RepetitionInterval (New-TimeSpan -Minutes $AutoPollMinutes) -RepetitionDuration (New-TimeSpan -Days 3650)
         $triggers  = @($evt10000, $evt10001, $logonTrig, $bootTrig, $pollTrig)
         # 任务设置：电池也跑、不限期停、可随时按需运行、网络可用与否都跑、多实例忽略新实例。
         $settings  = New-ScheduledTaskSettingsSet `
@@ -616,12 +623,12 @@ function Install-AutoTask {
             Write-Host "[OK] scheduled task registered'$taskName'." -ForegroundColor Green
             Write-Host "  network changes (cable plug/unplug, different Wi-Fi) will auto-switch config and refresh hosts (no manual run)." -ForegroundColor Gray
             Write-Host "  rule: wired->default static, wireless->DHCP; hosts synced to preferred IPv4." -ForegroundColor Gray
-            Write-Host "  triggers: network-change events (instant) + logon/startup + 5-min fallback (self-corrects within 5 min if an event is missed)." -ForegroundColor Gray
+            Write-Host "  triggers: network-change events (instant) + logon/startup + ${AutoPollMinutes}-min fallback (self-corrects within ${AutoPollMinutes} min if an event is missed)." -ForegroundColor Gray
             Write-Host "  log written to:$(Split-Path -Leaf $LogFile)" -ForegroundColor Gray
             Write-Host "  to disable, choose 'Disable auto-trigger' in this menu or run -UninstallAuto." -ForegroundColor Gray
             Write-Host "  test trigger: run as admin 'schtasks /Run /TN $taskName', or 'network_config.ps1 -Auto';" -ForegroundColor Gray
             Write-Host "            then check $LogFile for'Auto mode started', task'Last Run Result'becomes 0." -ForegroundColor Gray
-            Write-Log "enable auto-trigger: scheduled task registered successfully: $taskName (EventTrigger x2 + Logon/Boot + every-5-min polling fallback)"
+            Write-Log "enable auto-trigger: scheduled task registered successfully: $taskName (EventTrigger x2 + Logon/Boot + every-${AutoPollMinutes}-min polling fallback)"
             # ---- 自检诊断：注册成功 ≠ 能点火 ----
             # 事件通道 NetworkProfile/Operational 若未真正启用，触发器永不点火；
             # 受限环境下 wevtutil 启用可能被静默拒绝，这里回读状态并明确告警。

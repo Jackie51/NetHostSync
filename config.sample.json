@@ -9,5 +9,9 @@
   "WirelessMetric": 20,
   "ExcludeAdapters": "VPN|TAP|OpenVPN|WireGuard|Wintun|Cisco|AnyConnect|GlobalProtect|Forti|ZScaler|ZeroTrust|Tunnel|Virtual|WAN Miniport|SoftEther|Check Point|SonicWall|SSL VPN",
   "UpdateHostsOnAuto": true,
-  "UpdateHostsScript": "update_hosts.ps1"
+  "UpdateHostsScript": "update_hosts.ps1",
+  "AutoPollMinutes": 5,
+  "IpRetryAttempts": 6,
+  "IpRetrySeconds": 3,
+  "IpSettleSeconds": 0
 }

@@ -36,11 +36,19 @@ if (Test-Path $modPath) {
 # 命令行 -HostEntries 可临时覆盖（便于测试/特殊场景，不写 config.json）。
 $defaultTargets = @('know.com', 'host.docker.internal', 'gateway.docker.internal')
 $Targets = $defaultTargets
+# IPv4 探测重试参数（可在 config.json 覆盖；默认 6 次、每次间隔 3 秒，与改造前一致）。
+# 个别机器 DHCP 慢 / 重连竞态严重时，可只在该机 config.json 里调大（如 12 次 / 5 秒），不影响其他机器。
+$IpRetryAttempts = 6
+$IpRetrySeconds  = 3
+$IpSettleSeconds = 0   # 探测前先短暂等待（秒），让拔线/插线瞬间的适配器状态竞态窗口稳定；默认 0 不等待。
 $cfgFile = Join-Path $ScriptDir 'config.json'
 if (Test-Path $cfgFile) {
     try {
         $c = Get-Content $cfgFile -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($c.HostsTargets -and @($c.HostsTargets).Count -gt 0) { $Targets = @($c.HostsTargets) }
+        if ($c.IpRetryAttempts)           { $IpRetryAttempts = $c.IpRetryAttempts }
+        if ($c.IpRetrySeconds)            { $IpRetrySeconds = $c.IpRetrySeconds }
+        if ($null -ne $c.IpSettleSeconds) { $IpSettleSeconds = $c.IpSettleSeconds }
     } catch { }
 }
 if ($HostEntries -and $HostEntries.Count -gt 0) { $Targets = $HostEntries }
@@ -117,20 +125,24 @@ function Get-PreferredIPv4 {
 }
 
 # 多次重试探测 IPv4：刚切换网络（尤其手机热点 / 新 Wi-Fi）时 DHCP 可能尚未完成，
-# 首次探测可能拿不到地址；最多重试 6 次、每次间隔 3 秒，避免“网络已切换但 hosts 未更新”。
+# 首次探测可能拿不到地址。重试次数 / 间隔 / 探测前等待均由 config.json 控制
+# （IpRetryAttempts / IpRetrySeconds / IpSettleSeconds，默认 6 次、间隔 3 秒、不预等待），
+# 与改造前行为一致；个别机器 DHCP 慢 / 重连竞态严重时才在该机 config.json 调大，不影响其他机器。
+# 探测前先按配置短暂等待，让拔线/插线瞬间的适配器状态竞态窗口稳定（默认 0 秒，即不等待）。
+if ($IpSettleSeconds -gt 0) { Start-Sleep -Seconds $IpSettleSeconds }
 $newIP = $null
-for ($attempt = 1; $attempt -le 6; $attempt++) {
+for ($attempt = 1; $attempt -le $IpRetryAttempts; $attempt++) {
     $newIP = Get-PreferredIPv4
     if ($newIP) { break }
-    if ($attempt -lt 6) {
-        if (-not $Diag) { Write-Host "  attempt ${attempt}: no IPv4 detected, retrying in 3s..." -ForegroundColor Gray }
-        Write-Log "attempt ${attempt}: no IPv4 detected, retrying in 3s..."
-        Start-Sleep -Seconds 3
+    if ($attempt -lt $IpRetryAttempts) {
+        if (-not $Diag) { Write-Host "  attempt ${attempt}: no IPv4 detected, retrying in ${IpRetrySeconds}s..." -ForegroundColor Gray }
+        Write-Log "attempt ${attempt}: no IPv4 detected, retrying in ${IpRetrySeconds}s..."
+        Start-Sleep -Seconds $IpRetrySeconds
     }
 }
 if (-not $newIP) {
     Write-Host "[ERROR] no usable IPv4 address detected, cannot update hosts." -ForegroundColor Red
-    Write-Log "no usable IPv4 detected, aborting (retried 6 times)."
+    Write-Log "no usable IPv4 detected, aborting (retried $IpRetryAttempts times)."
     exit 1
 }
 Write-Host "current network IPv4 (preferred / in use) detected:$newIP" -ForegroundColor Cyan
