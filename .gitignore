@@ -31,3 +31,6 @@ _verify_*.ps1
 
 # 部署打包产物（由 pack_deploy.ps1 生成，勿提交）
 dist/
+
+# local venv (sandbox-blocked env helper, not part of project)
+.venv/

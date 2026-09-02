@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="640" viewBox="0 0 900 640" font-family="'Segoe UI','Microsoft YaHei',sans-serif">
+  <defs>
+    <style>
+      .title{font-size:22px;font-weight:700;fill:#e6edf3}
+      .sub{font-size:13px;fill:#8b949e}
+      .box{fill:#161b22;stroke:#30363d;stroke-width:1.5}
+      .boxhi{fill:#1f2937;stroke:#58a6ff;stroke-width:1.8}
+      .lbl{font-size:14px;fill:#e6edf3;font-weight:600}
+      .sm{font-size:11.5px;fill:#c9d1d9}
+      .code{font-family:'Consolas','Courier New',monospace;font-size:12px;fill:#7ee787}
+      .arrow{stroke:#58a6ff;stroke-width:2;fill:none}
+      .arrowg{stroke:#8b949e;stroke-width:2;fill:none;stroke-dasharray:4 3}
+      .tag{font-size:10.5px;fill:#0d1117;font-weight:700}
+    </style>
+  </defs>
+
+  <rect width="900" height="640" fill="#0d1117"/>
+
+  <!-- Title -->
+  <text x="40" y="42" class="title">NetHostSync — 网络切换自动同步架构</text>
+  <text x="40" y="64" class="sub">三重触发 · 计划任务 SYSTEM 身份 · 选最优 IPv4 · 幂等刷新 hosts</text>
+
+  <!-- Network change source -->
+  <g>
+    <rect class="box" x="40" y="100" width="210" height="80" rx="8"/>
+    <text x="145" y="132" text-anchor="middle" class="lbl">网络变化事件</text>
+    <text x="145" y="154" text-anchor="middle" class="sm">插拔网线 / 连断 Wi-Fi</text>
+    <text x="145" y="170" text-anchor="middle" class="sm">手机热点切换</text>
+  </g>
+
+  <!-- Trigger layer -->
+  <g>
+    <rect class="boxhi" x="320" y="90" width="260" height="300" rx="10"/>
+    <text x="450" y="116" text-anchor="middle" class="lbl">触发层（任一命中即执行）</text>
+
+    <rect class="box" x="345" y="132" width="210" height="58" rx="7"/>
+    <text x="450" y="154" text-anchor="middle" class="sm" style="fill:#7ee787;font-weight:700">① 事件触发器（最灵敏）</text>
+    <text x="450" y="172" text-anchor="middle" class="sm">NetworkProfile 10000连 / 10001断</text>
+
+    <rect class="box" x="345" y="200" width="210" height="48" rx="7"/>
+    <text x="450" y="222" text-anchor="middle" class="sm" style="fill:#7ee787;font-weight:700">② 登录 / 开机触发</text>
+    <text x="450" y="240" text-anchor="middle" class="sm">Logon + Boot</text>
+
+    <rect class="box" x="345" y="260" width="210" height="48" rx="7"/>
+    <text x="450" y="282" text-anchor="middle" class="sm" style="fill:#7ee787;font-weight:700">③ 每 5 分钟轮询兜底</text>
+    <text x="450" y="300" text-anchor="middle" class="sm">AutoPollMinutes=5</text>
+
+    <rect class="box" x="345" y="322" width="210" height="46" rx="7"/>
+    <text x="450" y="344" text-anchor="middle" class="sm">计划任务（SYSTEM）</text>
+    <text x="450" y="360" text-anchor="middle" class="code">NetworkConfigAutoSwitch</text>
+  </g>
+
+  <!-- Action -->
+  <g>
+    <rect class="boxhi" x="640" y="90" width="220" height="300" rx="10"/>
+    <text x="750" y="116" text-anchor="middle" class="lbl">执行层</text>
+
+    <rect class="box" x="662" y="132" width="176" height="60" rx="7"/>
+    <text x="750" y="154" text-anchor="middle" class="sm" style="fill:#ffa657;font-weight:700">选最优 IPv4</text>
+    <text x="750" y="172" text-anchor="middle" class="sm">有线&gt;无线 · 有网关</text>
+    <text x="750" y="187" text-anchor="middle" class="sm">度量小优先</text>
+
+    <rect class="box" x="662" y="202" width="176" height="58" rx="7"/>
+    <text x="750" y="224" text-anchor="middle" class="sm" style="fill:#ffa657;font-weight:700">切网配置</text>
+    <text x="750" y="242" text-anchor="middle" class="sm">有线→默认静态</text>
+    <text x="750" y="257" text-anchor="middle" class="sm">无线→DHCP</text>
+
+    <rect class="box" x="662" y="270" width="176" height="58" rx="7"/>
+    <text x="750" y="292" text-anchor="middle" class="sm" style="fill:#ffa657;font-weight:700">刷新 hosts</text>
+    <text x="750" y="310" text-anchor="middle" class="sm">只改目标行首列 IP</text>
+    <text x="750" y="325" text-anchor="middle" class="sm">幂等 · 不重复追加</text>
+
+    <rect class="box" x="662" y="338" width="176" height="40" rx="7"/>
+    <text x="750" y="362" text-anchor="middle" class="code">-Auto 非交互</text>
+  </g>
+
+  <!-- manual override note -->
+  <g>
+    <rect class="box" x="40" y="320" width="210" height="90" rx="8"/>
+    <text x="145" y="346" text-anchor="middle" class="sm" style="fill:#d2a8ff;font-weight:700">手动设置优先</text>
+    <text x="145" y="368" text-anchor="middle" class="sm">菜单 2/3/6 记 override</text>
+    <text x="145" y="384" text-anchor="middle" class="sm">→ 自动任务跳过该网卡</text>
+    <text x="145" y="400" text-anchor="middle" class="sm">菜单 1 交回自动</text>
+  </g>
+
+  <!-- logs -->
+  <g>
+    <rect class="box" x="40" y="440" width="820" height="70" rx="8"/>
+    <text x="60" y="466" class="sm" style="fill:#8b949e;font-weight:700">日志（排障附上）</text>
+    <text x="60" y="488" class="code">network_switch.log  —  网络切换 / 自动触发记录</text>
+    <text x="60" y="506" class="code">update_hosts.log    —  每次 hosts 刷新明细（探测 IP / 更新 / 追加 / 跳过）</text>
+  </g>
+
+  <!-- Arrows -->
+  <path class="arrow" d="M250 140 H312"/>
+  <path class="arrow" d="M580 240 H632"/>
+  <path class="arrowg" d="M420 410 C420 440 750 440 750 392"/>
+
+  <!-- legend -->
+  <g transform="translate(640,470)">
+    <rect class="box" x="0" y="0" width="220" height="40" rx="6"/>
+    <text x="110" y="25" text-anchor="middle" class="sm">蓝=触发　橙=执行　紫=override</text>
+  </g>
+</svg>
