@@ -124,10 +124,11 @@ if (-not $isAdmin -and -not $isSystem) {
         # 此处不应再拦，直接放行进入 Install-AutoTask（函数内 $isAdmin 此时为 $true）。
         # 注意：正常 UAC 提权后 $isAdmin 应为 $true，理论上到不了这里；保留为防御性放行。
     } else {
-    Write-Host "[TIP] not running as admin, requesting elevation..." -ForegroundColor Yellow
-    $elevArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
-    Start-Process PowerShell.exe -Verb RunAs -ArgumentList $elevArgs
-    exit
+        Write-Host "[TIP] not running as admin, requesting elevation..." -ForegroundColor Yellow
+        $elevArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$ScriptPath`""
+        Start-Process PowerShell.exe -Verb RunAs -ArgumentList $elevArgs
+        exit
+    }
 }
 
 # ============================================================
