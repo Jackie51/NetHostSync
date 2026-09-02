@@ -457,28 +457,9 @@ function Show-Result($alias) {
 # 网络变化时同步刷新 hosts（调用 update_hosts.ps1）：把 config.json 中 HostsTargets 指定的
 # 目标主机名指向当前正在使用的 IPv4，仅改未注释行。由 UpdateHostsOnAuto 开关控制。
 # 以独立 powershell 进程运行（继承 SYSTEM/管理员权限，无需再提权；其子进程 exit 不影响本脚本）。
-# 等待网络就绪：切换网络（尤其手机热点 / 新 Wi-Fi）后 DHCP 可能尚未完成、IP 未分配，
-# 此时若立即刷新 hosts 会写旧 IP / APIPA 或漏更新。轮询等待「任一已连接物理适配器拿到非链路本地 IPv4」，
-# 最多等待 $TimeoutSec 秒（每 3 秒检查一次）；超时也返回（交给 update_hosts.ps1 自身重试兜底）。
-function Wait-NetworkReady {
-    param([int]$TimeoutSec = 60)
-    $elapsed = 0
-    $step    = 3
-    while ($elapsed -lt $TimeoutSec) {
-        $ready = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object {
-            $_.Status -eq 'Up' -and $_.MediaConnectionState -eq 'Connected' -and -not (Test-Excluded $_)
-        }) | ForEach-Object {
-            $a = Get-NetIPAddress -InterfaceIndex $_.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-                 Where-Object { $_.IPAddress -notmatch '^169\.254\.' } | Select-Object -First 1
-            [bool]$a
-        } | Where-Object { $_ } | Select-Object -First 1
-        if ($ready) { return $elapsed }
-        Start-Sleep -Seconds $step
-        $elapsed += $step
-    }
-    return $elapsed
-}
-
+# 注：切换网络（尤其手机热点 / 新 Wi-Fi）后 DHCP 可能尚未完成、IP 未分配，
+#     等待与重试统一由 update_hosts.ps1 内部的重试循环负责（config.json 的
+#     IpSettleSeconds / IpRetryAttempts / IpRetrySeconds），此处不再单独等待。
 function Invoke-HostsUpdate {
     if (-not $UpdateHostsOnAuto) { return }
     $updateScript = Join-Path $ScriptDir $UpdateHostsScript
