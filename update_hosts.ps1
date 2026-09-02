@@ -176,27 +176,37 @@ if (-not (Test-Path $HostsPath)) {
 }
 
 $lines    = Get-Content $HostsPath -Encoding UTF8
+$newLines = $null
 if ($UseModule) {
-    # 走可单元测试的纯变换模块（保持逻辑单一来源，便于 Pester 离线覆盖）
-    $result   = Update-HostsLines -Lines $lines -Targets $Targets -NewIP $newIP
-    $newLines = $result.Lines
-    foreach ($c in $result.Changes) {
-        if ($c.StartsWith('UPDATE:')) {
-            $tail   = $c.Substring(7)                       # "旧IP -> 新IP (hosts)"
-            $m      = [regex]::Match($tail, '^(.*?) -> (.*?) \((.*)\)$')
-            $oldIp  = $m.Groups[1].Value
-            $newIp2 = $m.Groups[2].Value
-            $hosts  = $m.Groups[3].Value
-            Write-Host "  updated:$oldIp -> $newIp2  ($hosts)" -ForegroundColor Green
-            Write-Log "updated line:$oldIp -> $newIp2 ($hosts)"
-        } else {
-            $tail = $c.Substring(5)                         # "新IP host"
-            Write-Host "  appended:$tail" -ForegroundColor Yellow
-            Write-Log "appended line:$tail"
+    # 走可单元测试的纯变换模块（保持逻辑单一来源，便于 Pester 离线覆盖）。
+    # 关键：模块调用用 try/catch 包住——若模块版本不兼容、或个别 hosts 行触发其 bug 而抛异常，
+    #       不中断脚本，直接降级回退到下方内置逻辑；保证「有模块 / 无模块 / 模块出错」三种情况下
+    #       hosts 都能更新，彻底消除 update_hosts.ps1 与 NetHostSync.psm1 的执行冲突。
+    try {
+        $result   = Update-HostsLines -Lines $lines -Targets $Targets -NewIP $newIP
+        $newLines = $result.Lines
+        foreach ($c in $result.Changes) {
+            if ($c.StartsWith('UPDATE:')) {
+                $tail   = $c.Substring(7)                       # "旧IP -> 新IP (hosts)"
+                $m      = [regex]::Match($tail, '^(.*?) -> (.*?) \((.*)\)$')
+                $oldIp  = $m.Groups[1].Value
+                $newIp2 = $m.Groups[2].Value
+                $hosts  = $m.Groups[3].Value
+                Write-Host "  updated:$oldIp -> $newIp2  ($hosts)" -ForegroundColor Green
+                Write-Log "updated line:$oldIp -> $newIp2 ($hosts)"
+            } else {
+                $tail = $c.Substring(5)                         # "新IP host"
+                Write-Host "  appended:$tail" -ForegroundColor Yellow
+                Write-Log "appended line:$tail"
+            }
         }
+    } catch {
+        Write-Log "module Update-HostsLines failed ($_), falling back to built-in logic."
+        $UseModule = $false
     }
-} else {
-    # 模块缺失时的内置同款回退（确保单文件拷贝也能运行）
+}
+if (-not $UseModule) {
+    # 模块缺失或调用失败时的内置同款回退（确保单文件拷贝也能运行）
     $newLines = @()
     $seen     = @{}   # 目标主机名是否已在「激活行」中出现（注释行不算，缺失则追加激活行）
     foreach ($line in $lines) {
